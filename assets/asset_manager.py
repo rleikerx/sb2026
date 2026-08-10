@@ -68,6 +68,60 @@ STAND_FRAME_SAMPLES = 6        # frames probed per clip on the non-bipedal path
 # quadrupeds and serpents 0.00-0.34.
 STAND_BIPED_LEG_RATIO = 1.0
 
+# ---------------------------------------------------------------------------
+# Authored wing fold
+#
+# THIS IS THE ONE PLACE THIS EXPORTER INVENTS SOURCE DATA. Everything else here
+# selects a frame the cache already holds; the rotations below are written by
+# us, on the project owner's explicit decision, and a reader looking at a
+# Griffon later must be able to tell which part of its pose came from the client
+# and which did not. `stand_layer` reports `+wingfold` for exactly these rigs.
+#
+# Why it is needed. These rigs export with the wings splayed, and no frame
+# selection can fix it: measured over all 185 frames of all 7 of the Griffon's
+# clips, every one of the 6 ground clips holds the wings at 1.07-1.10 body
+# heights of lateral reach in its calmest frame, and the only folded-wing frames
+# belong to the flight clip, where they are a dive and a landing with the head
+# near the ground -- correctly rejected by the grounded stance test. Grafting the
+# wing rotations out of one frame onto the body of another was measured too and
+# is not a fix: the Griffon's best graft still reads 0.553, and drawn, it is a
+# wing held up rather than folded.
+#
+# What a folded wing is here: every wing bone laid along one direction. That is
+# what the source's own closed-wing frames do -- the Griffon's clips rotate
+# WING03/04/05 about X until all three point the same way -- so the shape is the
+# cache's; only the direction is ours.
+#
+# The direction is stated in MODEL space, not in the torso's frame, and that is
+# the whole of why one constant serves three rigs. A folded wing lies back along
+# the ground the creature stands on, and these bodies stand very differently: the
+# Griffon's spine is horizontal and the Aracoix's is vertical, so "along the
+# spine" means level for one and straight down through the floor for the other.
+# Measured in the torso's frame the two want 180 and 120 degrees and no single
+# value works; measured in model space they are the same answer. It rests on the
+# rig facing +Z, which is this format's convention (see `tools/pose_render.py`)
+# and which was checked on all four rigs in scope: the torso's yaw in the chosen
+# frame is 0.6 degrees or less.
+#
+# The pitch was picked by rendering, not by scoring. Measured, in body heights,
+# for how far the wing tips end up below the lowest part of the body:
+#
+#            pitch      0      10      20      30
+#   Griffon (70)    +0.884  +0.333  -0.203  -0.705
+#   Aracoix (18)    +0.889  +0.665  +0.447  +0.243
+#
+# so the Griffon puts its wings through the ground past ~15 degrees. At 0 the
+# mesh still clears the crown of the back by so little that the wingtips read as
+# two spikes above the head, which the bone-tip figures do not show and a
+# picture does. 10 is the value where neither happens on any of the three.
+WING_FOLD_SKELETONS = (18, 20, 70, 117)   # Aracoix, Aracoix, Hunting Griffon, Nelchael
+# A wing is the bone subtree hanging from one of these. Named rather than matched
+# on "WING", because 15 skeletons in this cache carry wing bones and only these
+# four are in scope. Nelchael's wings are its second pair of arms, and the source
+# spells the two sides differently -- LSHOULDERJB against RSHOULDERJ_B.
+WING_ROOT_BONES = ('LWINGJOINT', 'RWINGJOINT', 'LSHOULDERJB', 'RSHOULDERJ_B')
+WING_FOLD_PITCH_DEG = 10.0     # below horizontal, sweeping backward (-Z)
+
 # Import arcane asset classes
 import sys
 from pathlib import Path as PathLib
@@ -80,7 +134,7 @@ if str(parent_dir) not in sys.path:
 try:
     from arcane.ArcMesh import ArcMesh
     from arcane.ArcImage import ArcTexture
-    from arcane.ArcSkeleton import ArcSkeleton
+    from arcane.ArcSkeleton import ArcSkeleton, IDENTITY_3X3, _mat_mul, _quat_to_mat
     from arcane.ArcMotion import ArcMotion
     from arcane.ArcRender import ArcRender
     from arcane.ArcCObject import ArcCObject
@@ -109,6 +163,66 @@ except ImportError as e:
     )
 
 from assets.cache_archive import CacheArchive
+
+
+# ---------------------------------------------------------------------------
+# Rotation helpers for the authored wing fold. The matrix side is borrowed from
+# `ArcSkeleton` rather than restated, so the fold composes rotations exactly the
+# way `ArcSkeleton.pose` resolves them; only the two directions that module has
+# no use for live here.
+# ---------------------------------------------------------------------------
+def _unit(v):
+    """Normalise a direction, or None if it has no length."""
+    n = math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
+    return (v[0] / n, v[1] / n, v[2] / n) if n > 1e-9 else None
+
+
+def _transpose(m):
+    """A rotation matrix's inverse."""
+    return (m[0], m[3], m[6], m[1], m[4], m[7], m[2], m[5], m[8])
+
+
+def _quat_from_to(a, b):
+    """
+    The shortest rotation taking unit vector `a` onto unit vector `b`.
+
+    Shortest, and therefore mirror-safe without a left/right branch: reflecting
+    both arguments across X reflects the answer, so a wing bone and its opposite
+    number get quaternions that are each other's mirror by construction. That is
+    the whole of why nothing here reads a bone name for its side.
+    """
+    dot = max(-1.0, min(1.0, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]))
+    if dot > 1.0 - 1e-9:
+        return (0.0, 0.0, 0.0, 1.0)
+    if dot < -1.0 + 1e-9:
+        # Antipodal: every perpendicular axis is a half turn onto `b`, so state
+        # one instead of letting a zero cross product choose. X is always
+        # perpendicular here because the fold direction has no lateral part, and
+        # a half turn about X is its own mirror.
+        return (1.0, 0.0, 0.0, 0.0)
+    cross = (a[1] * b[2] - a[2] * b[1],
+             a[2] * b[0] - a[0] * b[2],
+             a[0] * b[1] - a[1] * b[0])
+    q = (cross[0], cross[1], cross[2], 1.0 + dot)
+    n = math.sqrt(sum(c * c for c in q))
+    return tuple(c / n for c in q)
+
+
+def _mat_to_quat(m):
+    """Row-major 3x3 -> (x, y, z, w), inverse of `ArcSkeleton._quat_to_mat`."""
+    m00, m01, m02, m10, m11, m12, m20, m21, m22 = m
+    trace = m00 + m11 + m22
+    if trace > 0.0:
+        s = math.sqrt(trace + 1.0) * 2.0
+        return ((m21 - m12) / s, (m02 - m20) / s, (m10 - m01) / s, 0.25 * s)
+    if m00 > m11 and m00 > m22:
+        s = math.sqrt(1.0 + m00 - m11 - m22) * 2.0
+        return (0.25 * s, (m01 + m10) / s, (m02 + m20) / s, (m21 - m12) / s)
+    if m11 > m22:
+        s = math.sqrt(1.0 + m11 - m00 - m22) * 2.0
+        return ((m01 + m10) / s, 0.25 * s, (m12 + m21) / s, (m02 - m20) / s)
+    s = math.sqrt(1.0 + m22 - m00 - m11) * 2.0
+    return ((m02 + m20) / s, (m12 + m21) / s, 0.25 * s, (m10 - m01) / s)
 
 
 # COBJECT records are prefixed with a magic and an `arcane.enums.arc_object`
@@ -506,14 +620,99 @@ class AssetManager:
                     best = self._calmest_frame(skeleton, self._rests_on_ground,
                                                samples=STAND_FRAME_SAMPLES)
 
+        # The layer is decided before the wings are touched, because it names
+        # which rung stood the *body* up and the fold answers a different
+        # question. It gains a suffix so that every picture and every report
+        # says out loud which rigs carry rotations this exporter wrote.
+        layer = layer if best else 'rest'
+        best, folded = self._fold_wings(skeleton_id, skeleton, best)
+
         self._stand_poses[skeleton_id] = best
-        self._stand_layers[skeleton_id] = layer if best else 'rest'
+        self._stand_layers[skeleton_id] = layer + ('+wingfold' if folded else '')
         return best
+
+    def _fold_wings(self, skeleton_id, skeleton, rotations):
+        """
+        Lay a winged rig's wings back along the ground, and say whether it did.
+
+        **Authored, not selected.** Every other rotation this class returns is a
+        frame out of a motion clip; these are written here. See the block above
+        `WING_FOLD_SKELETONS` for why no frame can supply them, and for how the
+        one constant was arrived at.
+
+        The rule is one sentence: *every bone in the wing points backward and
+        `WING_FOLD_PITCH_DEG` below horizontal*. The root joints are exempt —
+        those are the shoulder the wing hangs from, and turning one moves the
+        wing's attachment rather than the wing.
+
+        Nothing outside the wing subtrees is touched, and the rotations that
+        remain are the chosen frame's, so a folded Griffon still stands on the
+        legs the stance ladder picked for it.
+        """
+        if skeleton is None or skeleton_id not in WING_FOLD_SKELETONS:
+            return rotations, False
+
+        bones = getattr(skeleton, 'bones', None) or []
+        names = [(b.name or '').upper() for b in bones]
+        roots = {i for i, name in enumerate(names) if name in WING_ROOT_BONES}
+        if not roots:
+            return rotations, False
+
+        wing = set()
+        for i in range(len(bones)):
+            j, guard = i, 0
+            while j >= 0 and guard <= len(bones):
+                if j in roots:
+                    wing.add(i)
+                    break
+                j = bones[j].parent_index
+                guard += 1
+
+        pitch = math.radians(WING_FOLD_PITCH_DEG)
+        target = (0.0, -math.sin(pitch), -math.cos(pitch))
+        # Accumulated rotations under the *chosen* frame, so a wing hanging off a
+        # torso the clip has turned folds along the ground rather than along the
+        # torso. Asked of `ArcSkeleton.pose` instead of walked again here: two
+        # accumulations of one hierarchy would eventually disagree.
+        base = skeleton.pose(rotations)
+        out = dict(rotations)
+        accumulated = {}
+        folded = 0
+
+        for i, bone in enumerate(bones):
+            if i not in wing:
+                continue
+            parent = bone.parent_index
+            parent_rot = accumulated.get(parent)
+            if parent_rot is None:
+                entry = base.get(names[parent]) if 0 <= parent < len(names) else None
+                parent_rot = entry[0] if entry else IDENTITY_3X3
+
+            direction = _unit(bone.direction) if bone.length > 1e-6 else None
+            if i in roots or direction is None or not names[i]:
+                # Not a bone the fold turns. Carry the frame's own rotation
+                # through anyway, so anything hanging below it still resolves
+                # against what it is really attached to.
+                local = out.get(names[i]) if names[i] else None
+                accumulated[i] = (_mat_mul(parent_rot, _quat_to_mat(local))
+                                  if local else parent_rot)
+                continue
+
+            world = _quat_to_mat(_quat_from_to(direction, target))
+            out[names[i]] = _mat_to_quat(_mat_mul(_transpose(parent_rot), world))
+            accumulated[i] = world
+            folded += 1
+
+        return out, folded > 0
 
     def stand_layer(self, skeleton_id: int) -> str:
         """
         Which rung of `stand_pose` answered for this rig: upright, hunched,
-        grounded+limbs, grounded, or rest.
+        grounded+limbs, grounded, or rest — with `+wingfold` appended when the
+        wings carry rotations this exporter authored rather than read out of a
+        clip. That suffix is the audit trail: a Griffon is the only kind of
+        asset here whose pose is not wholly the cache's, and every picture and
+        report that prints a layer says so.
 
         Reported by the code that made the choice rather than reconstructed by
         the caller. A reporting tool that re-ran the gates itself would be a

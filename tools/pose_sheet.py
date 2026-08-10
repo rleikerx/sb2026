@@ -52,13 +52,21 @@ from tools.pose_render import DEFAULT_VIEWS, VIEWS, rasterise, slugify, triangle
 # One creature per pose layer, plus the rigs whose stance is known to be wrong
 # or known to be hard. Regenerated whenever a pose rule changes, so a regression
 # somewhere the change was not aimed at cannot pass unlooked-at.
+#
+# The four rigs whose layer reads `+wingfold` are here for a stronger reason
+# than the rest: their wing rotations are *written by this exporter* rather than
+# read out of a clip (see `WING_FOLD_SKELETONS`), so they are the one place a
+# picture is the only evidence there is.
 PROBE_ASSETS: Sequence[int] = (
     2000,    # Aelfborn        skel 1   upright  - a plain biped, the easy case
     12000,   # Flesh Golem     skel 104 upright  - braced knees
     12009,   # Hunting Hound   skel 10  grounded - a plain quadruped
     13368,   # Viper           skel 82  grounded - no legs at all
     2004,    # Centaur         skel 47  grounded - two body plans at once
-    13465,   # Hunting Griffon skel 70  grounded - wings
+    13465,   # Hunting Griffon skel 70  grounded - wings, authored fold
+    2002,    # Aracoix         skel 18  upright  - wings, authored fold
+    2003,    # Aracoix         skel 20  upright  - wings, authored fold
+    14078,   # Nelchael        skel 117 upright  - wings, authored fold
     13487,   # Lesser Wyvern   skel 88  grounded - wings, and only wings for arms
     12099,   # Bat             skel 55  grounded - wings on a rig that never lands
     12914,   # Rat-Man         skel 21  grounded - forelimbs up in every frame it has
