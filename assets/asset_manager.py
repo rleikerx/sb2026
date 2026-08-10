@@ -665,6 +665,27 @@ class AssetManager:
         self._stand_layers[skeleton_id] = layer + ('+wingfold' if folded else '')
         return best
 
+    def wing_fold_pose(self, skeleton_id: int) -> Dict[str, tuple]:
+        """
+        Just the authored wing fold, over the cache's rest pose — nothing else.
+
+        For a consumer that re-poses the body itself and only needs the wings not
+        to be splayed. Aegisfall is that consumer: it bakes its own rest-relative
+        transforms and stretches limbs onto its own rig, so a baked stance breaks
+        it (see `dev_log/081026.md`) — but the wings are the one thing no frame in
+        this cache supplies, which is why `_fold_wings` authors them at all.
+
+        `_fold_wings` composes against whatever base it is handed, so handing it an
+        empty one leaves every non-wing bone at rest and turns only the wing
+        subtree. Rigs outside `WING_FOLD_SKELETONS` get an empty dict, which
+        `assemble` reads as the rest pose.
+        """
+        skeleton = self.load_skeleton(skeleton_id)
+        if skeleton is None:
+            return {}
+        folded, did = self._fold_wings(skeleton_id, skeleton, {})
+        return folded if did else {}
+
     def _fold_wings(self, skeleton_id, skeleton, rotations):
         """
         Lay a winged rig's wings back along the ground, and say whether it did.

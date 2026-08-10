@@ -28,9 +28,17 @@ class AssetListItem:
 class MeshPart:
     mesh_id: int
     texture_id: Optional[int]
-    transform: np.ndarray  # 4x4
+    transform: np.ndarray  # 4x4, model space
     source_render_id: int
     target_bone: Optional[str]
+    # The same placement with the joint left out: what the render itself asks
+    # for, relative to `target_bone`. `transform` is this composed with the
+    # bone's model-space matrix, so a consumer that drives the rig wants this
+    # one and a consumer that just wants triangles wants the other.
+    local_transform: Optional[np.ndarray] = None
+    # This part is the opposite side's mesh reflected across X. Only one side
+    # is stored, so the flag is the only way to tell the copy from the original.
+    mirrored: bool = False
 
 
 @dataclass(frozen=True)
@@ -41,6 +49,10 @@ class AssembledAsset:
     render_ids: List[int]
     skeleton_id: Optional[int]
     parts: List[MeshPart]
+    # The posed rig as a tree: bone name -> (parent name, local 4x4, flip), in
+    # file order, parents first. None when the asset has no skeleton. Present so
+    # an exporter can write the hierarchy out instead of flattening it away.
+    bones: Optional[Dict[str, tuple]] = None
 
 
 # `arcane.enums.arc_object` type code -> browsable category.
@@ -64,6 +76,13 @@ TYPE_CODE_TO_KIND = {
     17: AssetKind.STRUCTURE,   # ASSET (city asset template)
     19: AssetKind.OTHER,       # OBJECT
 }
+
+
+# `assemble(pose=...)` takes a bone->quaternion dict, `None` for "stand a creature
+# up" or `False` for the cache's rest pose. This third value asks for the rest pose
+# with only the authored wing fold applied — what a consumer that re-poses the body
+# itself wants, because a splayed wing is the one thing it cannot fix downstream.
+REST_WITH_WINGS_FOLDED = 'rest+wingfold'
 
 
 class AssetCatalog:
@@ -127,12 +146,21 @@ class AssetCatalog:
             parts.extend(self._flatten_render_to_parts(render_id=rid, parent_xform=np.identity(4, dtype=np.float32)))
 
         parts = self._drop_collision_hulls(parts)
+        bones = None
         if skeleton_id is not None:
-            if pose is None and self._get_kind(asset_id) is AssetKind.CREATURE:
+            if pose == REST_WITH_WINGS_FOLDED:
+                # The cache's rest pose everywhere except the wings, which no frame
+                # in this cache supplies unsplayed (`AssetManager.wing_fold_pose`).
+                pose = self._asset_manager.wing_fold_pose(skeleton_id)
+            elif pose is None and self._get_kind(asset_id) is AssetKind.CREATURE:
                 pose = self._asset_manager.stand_pose(skeleton_id)
             # False (rest pose was asked for) and {} (no clip stands this rig)
             # both mean the same thing downstream.
-            parts = self._bind_parts_to_skeleton(parts, skeleton_id, pose or None)
+            pose = pose or None
+            parts = self._bind_parts_to_skeleton(parts, skeleton_id, pose)
+            skeleton = self._asset_manager.load_skeleton(skeleton_id)
+            if skeleton and getattr(skeleton, "bones", None):
+                bones = skeleton.node_hierarchy(pose)
 
         return AssembledAsset(
             asset_id=asset_id,
@@ -141,6 +169,7 @@ class AssetCatalog:
             render_ids=render_ids,
             skeleton_id=skeleton_id,
             parts=parts,
+            bones=bones,
         )
 
     # Body parts a character has many interchangeable variants of; the client
@@ -239,18 +268,21 @@ class AssetCatalog:
         xform[2, :3] = rotation[6:9]
         xform[0, 3], xform[1, 3], xform[2, 3] = position
 
+        local = part.transform
         if mirror:
             reflect = np.identity(4, dtype=np.float32)
             reflect[0, 0] = -1.0
-            xform = xform @ reflect
+            local = reflect @ local
 
         return MeshPart(
             mesh_id=part.mesh_id,
             texture_id=part.texture_id,
-            transform=xform @ part.transform,
+            transform=xform @ local,
             source_render_id=part.source_render_id,
             # Name the joint it actually sits on, not the side the mesh came from.
             target_bone=bone,
+            local_transform=local,
+            mirrored=mirror,
         )
 
     @staticmethod
