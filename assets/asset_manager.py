@@ -63,6 +63,36 @@ STAND_MAX_FOOT_GAP = 0.35
 # and the ones that read as reaching or swinging at +0.35 to +0.58.
 STAND_MAX_BIPED_ARM_RISE = 0.0
 STAND_MAX_GROUND_LIFT = 0.25   # fraction of body height the feet may sit above the lowest point
+# A standing figure holds its spine near vertical.
+#
+# Nothing else here asks about the body at all — every gate above is about legs,
+# feet or arms — so a frame can put both soles flat, both legs under the body and
+# both arms down while the torso is rolled onto one shoulder, and pass all of
+# them. Skeleton 117 (Nelchael) was doing exactly that: its chosen frame stands
+# on legs tilted 28.6 degrees with the soles 3.2 degrees off flat and the feet
+# 0.245 body-heights apart — inside every bound on this page — with the spine
+# **39.4 degrees off vertical**, rolled sideways rather than bowed forward. Drawn,
+# it is a figure collapsing onto its own shoulder. Measured on the exported
+# vertices rather than the bones, its head sits 0.834 units to one side of its
+# feet and its chest mesh leans 40.8 degrees, against 11.7 for the same mesh in
+# the rest pose.
+#
+# The bound sits in a gap 34 degrees wide: anything from 6 to 39 picks the same
+# frame on the one rig that reaches this rung and changes nothing anywhere else.
+# 30 is chosen inside it because it is also above every torso lean this ladder
+# already accepts on a two-legged rig (worst 26.8 degrees, skeletons 98 and 131)
+# and below Nelchael's 39.4 — and because it is the bound the legs are already
+# held to, so the rule reads "a standing figure's spine is as near vertical as
+# its legs are". Stated as its own constant and not as a reference to
+# STAND_MAX_LEG_TILT: they answer different questions and only coincide today.
+#
+# The two names are matched as substrings like every other group here, which
+# also picks up the numbered spines (UPPERBACK2, LOWERBACK1). A bare 'BACK'
+# would have been the obvious spelling and is a trap: 68 skeletons in this cache
+# carry BACKSHEATHSPACER, a sword-mount pointing back and down at 73 degrees,
+# which would fail this test on every frame of every clip.
+STAND_TORSO_BONES = ('UPPERBACK', 'LOWERBACK')
+STAND_MAX_TORSO_LEAN = 30.0    # degrees off vertical, worst of the spine bones
 STAND_FRAME_SAMPLES = 6        # frames probed per clip on the non-bipedal path
 # Legs-to-spine above this reads as a biped. Measured: bipeds 1.34-1.71,
 # quadrupeds and serpents 0.00-0.34.
@@ -594,15 +624,16 @@ class AssetManager:
         # sitting at rest because nobody had looked past the first frame of their
         # clips. A clip does not put its calmest frame first.
         layer = 'upright'
-        best = self._best_frame(skeleton, self._stance_ladder(self._stands_upright))
+        best, rung = self._best_frame(skeleton,
+                                      self._stance_ladder(self._stands_upright))
         if not best:
             if self._is_bipedal(skeleton):
                 # A biped that cannot straighten its legs. Tried after the
                 # upright gate and never instead of it, so a rig that already
                 # stands keeps the stance it had.
                 layer = 'hunched'
-                best = self._best_frame(skeleton,
-                                        self._stance_ladder(self._stands_hunched))
+                best, rung = self._best_frame(
+                    skeleton, self._stance_ladder(self._stands_hunched))
             else:
                 # The shape test asks the body to be no taller than it is wide,
                 # which is true of a hound and false of anything standing on two
@@ -612,6 +643,9 @@ class AssetManager:
                 # Ask for settled forelimbs first and drop the requirement only
                 # if the rig has no such frame, so wanting better arms can never
                 # cost a rig the pose it already had.
+                # Not a ladder, so it has no rung tag of its own; stated rather
+                # than inherited from the upright attempt above.
+                rung = ''
                 layer = 'grounded+limbs'
                 best = self._calmest_frame(skeleton, self._rests_with_limbs_down,
                                            samples=STAND_FRAME_SAMPLES)
@@ -624,7 +658,7 @@ class AssetManager:
         # which rung stood the *body* up and the fold answers a different
         # question. It gains a suffix so that every picture and every report
         # says out loud which rigs carry rotations this exporter wrote.
-        layer = layer if best else 'rest'
+        layer = (layer + rung) if best else 'rest'
         best, folded = self._fold_wings(skeleton_id, skeleton, best)
 
         self._stand_poses[skeleton_id] = best
@@ -708,11 +742,18 @@ class AssetManager:
     def stand_layer(self, skeleton_id: int) -> str:
         """
         Which rung of `stand_pose` answered for this rig: upright, hunched,
-        grounded+limbs, grounded, or rest — with `+wingfold` appended when the
-        wings carry rotations this exporter authored rather than read out of a
-        clip. That suffix is the audit trail: a Griffon is the only kind of
-        asset here whose pose is not wholly the cache's, and every picture and
-        report that prints a layer says so.
+        grounded+limbs, grounded, or rest, with up to two suffixes.
+
+        `+torso` means the stance was settled by the spine rung rather than by
+        the arm and stride preferences above it — still a frame out of a clip,
+        chosen by a question the ladder did not used to ask. One rig in this
+        cache reaches it (117, Nelchael).
+
+        `+wingfold` means something different in kind and the distinction is the
+        whole point of printing either: those wings carry rotations this
+        exporter *authored* rather than read out of a clip. A Griffon is the
+        only sort of asset here whose pose is not wholly the cache's, and every
+        picture and report that prints a layer says so.
 
         Reported by the code that made the choice rather than reconstructed by
         the caller. A reporting tool that re-ran the gates itself would be a
@@ -723,13 +764,21 @@ class AssetManager:
             self.stand_pose(skeleton_id)
         return self._stand_layers.get(skeleton_id, 'rest')
 
-    def _best_frame(self, skeleton, ladder) -> Dict[str, tuple]:
-        """The calmest frame the first satisfiable rung of `ladder` accepts."""
-        for accepts in ladder:
+    def _best_frame(self, skeleton, ladder) -> Tuple[Dict[str, tuple], str]:
+        """
+        The calmest frame the first satisfiable rung of `ladder` accepts, and
+        that rung's tag.
+
+        The tag is reported rather than re-derived for `stand_layer`'s stated
+        reason: a caller that worked out which rung must have answered would be
+        a second answer to a question this loop has already answered, and the
+        two would drift the first time a rung moved.
+        """
+        for tag, accepts in ladder:
             best = self._calmest_frame(skeleton, accepts, samples=STAND_FRAME_SAMPLES)
             if best:
-                return best
-        return {}
+                return best, tag
+        return {}, ''
 
     def _calmest_frame(self, skeleton, accepts, samples: int) -> Dict[str, tuple]:
         """The accepted frame that disturbs the rest pose least, or {} if none is."""
@@ -909,10 +958,33 @@ class AssetManager:
             if any(k in name for k in STAND_ARM_BONES)
         )
 
+    @staticmethod
+    def _torso_upright(segments: Dict[str, tuple]) -> bool:
+        """
+        Whether the spine is near vertical rather than rolled onto a shoulder.
+
+        The worst of the spine bones, which is the convention `_stance_angles`
+        already uses for legs and feet: one segment thrown out disqualifies the
+        frame however good the rest of the stack is.
+
+        A rig that names no spine bone answers False, so it drops to the
+        unconditioned rung below and keeps exactly the frame it had. That is the
+        safe direction for a *preference*: no evidence must not read as
+        agreement.
+        """
+        spine = [direction for name, (direction, _tip) in segments.items()
+                 if any(k in name for k in STAND_TORSO_BONES)]
+        if not spine:
+            return False
+        return all(
+            math.degrees(math.acos(max(-1.0, min(1.0, d[1])))) <= STAND_MAX_TORSO_LEAN
+            for d in spine
+        )
+
     @classmethod
     def _stance_ladder(cls, gate):
         """
-        One stance gate as three, strictest first.
+        One stance gate as four, each rung a `(tag, accepts)` pair.
 
         A stance gate asks where the legs and feet are, and a walk frame answers
         every part of it correctly — both soles flat, both legs under the body.
@@ -920,13 +992,22 @@ class AssetManager:
         stride apart and an arm is swinging. Those are asked here instead, as
         preferences rather than requirements.
 
-        Three rungs rather than one conjunction, because the two extra
-        conditions are not available together on every rig: some have frames
-        with the arms down and none with the feet also together, and folding
-        both into a single test drops such a rig all the way back to a swinging
-        arm to buy a stride it was never going to lose. Each rung can only be
-        reached by what the one above it rejected, so none of them can cost a
-        rig the pose it already had.
+        Separate rungs rather than one conjunction, because the extra conditions
+        are not available together on every rig: some have frames with the arms
+        down and none with the feet also together, and folding both into a
+        single test drops such a rig all the way back to a swinging arm to buy a
+        stride it was never going to lose. Each rung can only be reached by what
+        the one above it rejected, so none of them can cost a rig the pose it
+        already had.
+
+        The torso rung is last before the bare gate, and sits there rather than
+        at the top on purpose. Above it, the ladder is already choosing between
+        frames whose arms hang; the rung exists for the case where it is not,
+        because the bottom rung was unconditioned — it took whatever stood, in
+        whatever attitude. Measured over every creature skeleton in this cache,
+        **one** reaches it: 117, the only two-legged rig with no arms-down frame
+        at all, whose second pair of arms are its wings. Every other rig is
+        answered by a rung above and never consults this one.
         """
         def still(skeleton, rotations):
             segments = skeleton.posed_segments(rotations)
@@ -937,7 +1018,11 @@ class AssetManager:
             return (gate(skeleton, rotations)
                     and cls._arms_hang(skeleton.posed_segments(rotations)))
 
-        return (still, arms_down, gate)
+        def torso_up(skeleton, rotations):
+            return (gate(skeleton, rotations)
+                    and cls._torso_upright(skeleton.posed_segments(rotations)))
+
+        return (('', still), ('', arms_down), ('+torso', torso_up), ('', gate))
 
     @classmethod
     def _rests_with_limbs_down(cls, skeleton, rotations: Dict[str, tuple]) -> bool:
