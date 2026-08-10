@@ -1,13 +1,49 @@
 
+import math
 from collections import OrderedDict
 from arcane.util import ResStream
 
 MAGIC_SKEL = b'SKEL'
 CURRENT_VERSION = 3
+IDENTITY_3X3 = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+
+
+# ────────────────────── small row-major 3x3 helpers ──────────────────────
+# Kept as plain tuples so this module stays free of numpy, like the rest of
+# arcane/. Callers that want 4x4s build them from these.
+
+def _quat_to_mat(q):
+    """(x, y, z, w) -> row-major 3x3. Degenerate quaternions fall back to identity."""
+    x, y, z, w = q
+    n = math.sqrt(x * x + y * y + z * z + w * w)
+    if n < 1e-9:
+        return IDENTITY_3X3
+    x, y, z, w = x / n, y / n, z / n, w / n
+    return (
+        1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - z * w), 2.0 * (x * z + y * w),
+        2.0 * (x * y + z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - x * w),
+        2.0 * (x * z - y * w), 2.0 * (y * z + x * w), 1.0 - 2.0 * (x * x + y * y),
+    )
+
+
+def _mat_mul(a, b):
+    return tuple(
+        a[r * 3] * b[c] + a[r * 3 + 1] * b[3 + c] + a[r * 3 + 2] * b[6 + c]
+        for r in range(3) for c in range(3)
+    )
+
+
+def _mat_apply(m, v):
+    return (
+        m[0] * v[0] + m[1] * v[1] + m[2] * v[2],
+        m[3] * v[0] + m[4] * v[1] + m[5] * v[2],
+        m[6] * v[0] + m[7] * v[1] + m[8] * v[2],
+    )
 
 
 class ArcBoneRecord(object):
-    __slots__ = ('name_hash', 'parent_index', 'flags', 'bind_pose_matrix', 'name')
+    __slots__ = ('name_hash', 'parent_index', 'flags', 'bind_pose_matrix', 'name',
+                 'direction', 'length', 'axis', 'flip')
 
     def __init__(self):
         self.name_hash = 0
@@ -15,6 +51,11 @@ class ArcBoneRecord(object):
         self.flags = 0          # attachment / billboard bits
         self.bind_pose_matrix = [0.0] * 16
         self.name = None        # optional string name when available
+        # ASF-style rest geometry (present in the string-headed format).
+        self.direction = (0.0, 0.0, 0.0)
+        self.length = 0.0
+        self.axis = (0.0, 0.0, 0.0)
+        self.flip = 0           # mirrored limb: reuse the opposite side's mesh
 
     # ────────────────────────── binary ──────────────────────────
 
@@ -45,6 +86,10 @@ class ArcBoneRecord(object):
         self.flags = data['flags']
         self.bind_pose_matrix = data['bind_pose_matrix']
         self.name = data.get('name')
+        self.direction = tuple(data.get('direction', (0.0, 0.0, 0.0)))
+        self.length = data.get('length', 0.0)
+        self.axis = tuple(data.get('axis', (0.0, 0.0, 0.0)))
+        self.flip = data.get('flip', 0)
 
     def save_json(self):
         out = OrderedDict([
@@ -55,6 +100,10 @@ class ArcBoneRecord(object):
         ])
         if self.name is not None:
             out['name'] = self.name
+        out['direction'] = list(self.direction)
+        out['length'] = self.length
+        out['axis'] = list(self.axis)
+        out['flip'] = self.flip
         return out
 
 
@@ -133,11 +182,11 @@ class ArcSkeleton(object):
                 bone_name = stream.read_string()
 
                 # Direction (Vec3)
-                _dir_x, _dir_y, _dir_z = stream.read_tuple()
+                dir_x, dir_y, dir_z = stream.read_tuple()
                 # Length
-                _length = stream.read_float()
-                # Axis (Vec3)
-                _axis_x, _axis_y, _axis_z = stream.read_tuple()
+                bone_length = stream.read_float()
+                # Axis (Vec3) - Euler angles, radians
+                axis_x, axis_y, axis_z = stream.read_tuple()
 
                 # Skip flags string
                 try:
@@ -151,7 +200,7 @@ class ArcSkeleton(object):
                 _ = stream.read_bytes(36)
 
                 # Flip flag and unknown flag
-                _flip = stream.read_byte()
+                flip = stream.read_byte()
                 _unknown = stream.read_byte()
 
                 # Number of children
@@ -162,10 +211,17 @@ class ArcSkeleton(object):
                 b.parent_index = -1
                 b.flags = 0
                 b.name = bone_name
-                # No bind-pose provided in this format; use identity
-                b.bind_pose_matrix = [1.0, 0.0, 0.0, 0.0,
-                                      0.0, 1.0, 0.0, 0.0,
-                                      0.0, 0.0, 1.0, 0.0,
+                b.direction = (dir_x, dir_y, dir_z)
+                b.length = bone_length
+                b.axis = (axis_x, axis_y, axis_z)
+                b.flip = flip
+                # This format carries no explicit matrix (the 36 skipped bytes
+                # are zero throughout). Rest pose is ASF-style: the bone runs
+                # from its parent's tip along `direction` for `length`, so the
+                # local transform is that offset.
+                b.bind_pose_matrix = [1.0, 0.0, 0.0, dir_x * bone_length,
+                                      0.0, 1.0, 0.0, dir_y * bone_length,
+                                      0.0, 0.0, 1.0, dir_z * bone_length,
                                       0.0, 0.0, 0.0, 1.0]
                 bones.append(b)
                 nchildren.append(child_count)
@@ -198,6 +254,103 @@ class ArcSkeleton(object):
         self.bones = bones
         self.motion_tokens = motion_tokens
         return
+
+    # ────────────────────────── rest pose ──────────────────────────
+
+    def bone_tips(self):
+        """
+        Model-space position of each bone's tip in the rest pose.
+
+        Bones are stored parent-before-child, so a single forward pass resolves
+        the whole hierarchy.
+        """
+        tips = [(0.0, 0.0, 0.0)] * len(self.bones)
+        for i, bone in enumerate(self.bones):
+            if 0 <= bone.parent_index < i:
+                px, py, pz = tips[bone.parent_index]
+            else:
+                px, py, pz = 0.0, 0.0, 0.0
+            dx, dy, dz = bone.direction
+            tips[i] = (px + dx * bone.length, py + dy * bone.length, pz + dz * bone.length)
+        return tips
+
+    def attach_points(self):
+        """
+        Map bone name -> the joint a mesh attached to that bone sits on.
+
+        Part meshes are modelled about the joint at the *start* of their bone,
+        which is the parent's tip.
+        """
+        return {name: position for name, (_rotation, position) in self.pose().items()}
+
+    def pose(self, rotations=None):
+        """
+        Map bone name -> (rotation, position) for the joint its mesh hangs from.
+
+        `rotations` gives a bone's local turn as an (x, y, z, w) quaternion, the
+        form the motion clips store; bones it leaves out stay at rest. Passing
+        nothing yields the rest layout with an identity rotation on every joint,
+        which is what `attach_points` reports.
+
+        The rest pose the cache stores is a zero pose — every limb bone runs
+        straight down its axis, so feet point at the floor and knees never bend.
+        A standing character is a clip frame applied on top of it, which is why
+        this takes rotations at all.
+
+        Rotation is row-major 3x3. Bones are stored parent-before-child, so one
+        forward pass resolves the hierarchy.
+        """
+        rotations = rotations or {}
+        rots = [IDENTITY_3X3] * len(self.bones)
+        tips = [(0.0, 0.0, 0.0)] * len(self.bones)
+        out = {}
+
+        for i, bone in enumerate(self.bones):
+            if 0 <= bone.parent_index < i:
+                parent_rot = rots[bone.parent_index]
+                start = tips[bone.parent_index]
+            else:
+                parent_rot = IDENTITY_3X3
+                start = (0.0, 0.0, 0.0)
+
+            local = rotations.get(bone.name.upper()) if bone.name else None
+            rots[i] = _mat_mul(parent_rot, _quat_to_mat(local)) if local else parent_rot
+
+            dx, dy, dz = bone.direction
+            sx, sy, sz = _mat_apply(
+                rots[i], (dx * bone.length, dy * bone.length, dz * bone.length)
+            )
+            tips[i] = (start[0] + sx, start[1] + sy, start[2] + sz)
+
+            if bone.name:
+                out[bone.name.upper()] = (rots[i], start)
+
+        return out
+
+    def posed_segments(self, rotations=None):
+        """
+        Map bone name -> (unit direction, tip) with `rotations` applied.
+
+        Where `pose` gives the joint a mesh hangs from, this gives the bone's
+        own line, which is what tells you whether a limb is upright or a foot
+        is lying flat. Zero-length bones — attachment points like HELM or
+        LHELD — have no direction and are left out.
+        """
+        out = {}
+        joints = self.pose(rotations)
+        for bone in self.bones:
+            if not bone.name or bone.length <= 1e-6:
+                continue
+            entry = joints.get(bone.name.upper())
+            if entry is None:
+                continue
+            rotation, start = entry
+            seg = _mat_apply(rotation, tuple(c * bone.length for c in bone.direction))
+            out[bone.name.upper()] = (
+                tuple(c / bone.length for c in seg),
+                (start[0] + seg[0], start[1] + seg[1], start[2] + seg[2]),
+            )
+        return out
 
     # ────────────────────────── json ──────────────────────────
 

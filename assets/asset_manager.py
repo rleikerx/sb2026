@@ -1,12 +1,72 @@
 """
 Asset Manager - Central registry for loading and caching Shadowbane assets.
+
+Assets are read straight out of the `*.cache` archives in `arcane_dump/`; there
+is no extraction step. Each archive's index is parsed once at startup and
+individual records are decompressed on demand (see `assets.cache_archive`).
 """
 
-import json
-import os
+import math
+import struct
 from pathlib import Path
-from typing import Dict, Optional, List
-from PIL import Image
+from typing import Dict, Optional, List, Tuple
+from PIL import Image, ImageOps
+
+# What counts as "standing" when picking a creature's default pose. Substrings,
+# because rigs name the pair L/R (LFEMUR, RFOOT). The tilts are generous enough
+# for a golem's braced knees and tight enough to reject a lunge: measured across
+# the sampled rigs, genuine stands sit at 6-27 degrees of leg tilt and the
+# action frames that fool a legs-only test at 37-46.
+STAND_LEG_BONES = ('FEMUR', 'TIBIA')
+STAND_FOOT_BONES = ('FOOT',)
+STAND_MAX_LEG_TILT = 30.0    # degrees off vertical
+STAND_MAX_FOOT_TILT = 10.0   # degrees off horizontal
+
+# An ogre, a troll, a wight: a biped that never straightens its legs, so every
+# frame it has is past the 30 degrees a walking stance is judged by. Widening
+# that threshold instead was tried and re-admits sprawl, because leg tilt alone
+# cannot tell a crouch from a body lying down with its knees up. So this is a
+# separate rung carrying three further conditions — feet still flat, body still
+# taller than it is wide, feet still the lowest thing on it — and only what the
+# upright gate has already rejected reaches it.
+#
+# Measured over the rigs that had no pose at all: their best flat-footed upright
+# frame sits at 25-51 degrees, and the next rig up needs 75. Anything from 55 to
+# 65 selects exactly the same eight skeletons, so this sits in a gap rather than
+# on a cliff edge.
+STAND_MAX_HUNCH_TILT = 55.0
+
+# Rigs the upright test cannot describe — snakes, drakes, quadrupeds — are judged
+# on the shape the whole skeleton makes instead. Their rest pose stacks every
+# bone up one axis, so a viper 22 units long reads as a 33-unit pole; what marks
+# a real pose is that the body lies within its own footprint rather than above
+# it, and that whatever the creature walks on ends up underneath.
+STAND_GROUND_BONES = ('FOOT', 'TOE', 'CLAW', 'PAW', 'HOOF')
+STAND_SPINE_BONES = ('BACK', 'NECK', 'TAIL', 'SPINE')
+# A settled creature does not hold its forelimbs up. Measured on the chosen
+# frames: poses that read correctly sit at -0.35 to +0.28, the ones that read as
+# a shrug or a sprawl at +0.44 to +0.83.
+STAND_ARM_BONES = ('HUMERUS', 'RADIUS')
+STAND_MAX_ARM_RISE = 0.35      # sine of how far a forelimb may rise above horizontal
+# Feet apart, as a fraction of body height: what separates a stance from a
+# stride. Both pass every gate about legs and feet — a walk frame has both soles
+# flat on the ground and both legs under the body — so without this the calmest
+# frame is regularly somebody caught mid-step. Measured on the frames these
+# rules chose: the ones that read as standing sit at 0.09-0.33 and the ones that
+# read as walking at 0.46-0.52.
+STAND_MAX_FOOT_GAP = 0.35
+# A standing biped does not hold a forelimb above horizontal — it lets the arm
+# hang. `STAND_MAX_ARM_RISE` is deliberately not reused here: that number was
+# measured on quadruped forelimbs, where +0.35 is a settled dog, and on two legs
+# the same value is a figure reaching out in front of itself. Measured on the
+# frames these rules chose: the ones that read as standing sit at -0.82 to -0.06
+# and the ones that read as reaching or swinging at +0.35 to +0.58.
+STAND_MAX_BIPED_ARM_RISE = 0.0
+STAND_MAX_GROUND_LIFT = 0.25   # fraction of body height the feet may sit above the lowest point
+STAND_FRAME_SAMPLES = 6        # frames probed per clip on the non-bipedal path
+# Legs-to-spine above this reads as a biped. Measured: bipeds 1.34-1.71,
+# quadrupeds and serpents 0.00-0.34.
+STAND_BIPED_LEG_RATIO = 1.0
 
 # Import arcane asset classes
 import sys
@@ -24,17 +84,76 @@ try:
     from arcane.ArcMotion import ArcMotion
     from arcane.ArcRender import ArcRender
     from arcane.ArcCObject import ArcCObject
+    from arcane.util import ResStream
+    from arcane.objects import (
+        ArcAssetStructureObject,
+        ArcCharacter,
+        ArcCityAssetTemplate,
+        ArcContainerObject,
+        ArcDeed,
+        ArcDoorObject,
+        ArcDungeonExitObject,
+        ArcDungeonStairObject,
+        ArcDungeonUnitObject,
+        ArcItem,
+        ArcKey,
+        ArcObj,
+        ArcRune,
+        ArcStaticObject,
+        ArcStructureObject,
+    )
 except ImportError as e:
     raise ImportError(
         f"Failed to import arcane package. Make sure the 'arcane' package is available in the parent directory ({parent_dir}). "
         f"Original error: {e}"
     )
 
+from assets.cache_archive import CacheArchive
+
+
+# COBJECT records are prefixed with a magic and an `arcane.enums.arc_object`
+# type code, then the body of the matching ArcObj subclass.
+COBJECT_MAGIC = b"TNLC"
+COBJECT_HEADER_SIZE = 8
+
+# Object type code -> parser. Confirmed against CObjects.cache: every record of
+# each present type parses and consumes its body exactly.
+COBJECT_TYPE_PARSERS = {
+    1: ArcObj,                      # LIGHT
+    2: ArcDoorObject,               # DOOR
+    3: ArcStaticObject,             # STATIC
+    4: ArcStructureObject,          # STRUCTURE
+    5: ArcAssetStructureObject,     # ASSETSTRUCTURE
+    6: ArcDungeonUnitObject,        # DUNGEONUNIT
+    7: ArcDungeonExitObject,        # DUNGEONEXIT
+    8: ArcDungeonStairObject,       # DUNGEONSTAIR
+    9: ArcItem,                     # ITEM
+    10: ArcObj,                     # TERRAIN
+    11: ArcCharacter,               # PLAYER
+    12: ArcCharacter,               # MOBILE
+    13: ArcRune,                    # RUNE
+    14: ArcContainerObject,         # CONTAINER
+    15: ArcDeed,                    # DEED
+    16: ArcKey,                     # KEY
+    17: ArcCityAssetTemplate,       # ASSET
+    19: ArcObj,                     # OBJECT
+}
+
 
 class AssetManager:
     """
-    Manages loading and caching of game assets from arcane_dump/ folders.
+    Manages loading and caching of game assets from the arcane_dump/ cache archives.
     """
+
+    # asset type -> the cache file stems that can back it, in preference order
+    CACHE_STEMS = {
+        'mesh': ('mesh',),
+        'texture': ('textures', 'texture'),
+        'skeleton': ('skeleton',),
+        'motion': ('motion',),
+        'render': ('render',),
+        'cobject': ('cobjects', 'cobject'),
+    }
 
     def __init__(self, arcane_dump_path: str):
         """
@@ -44,11 +163,10 @@ class AssetManager:
             arcane_dump_path: Path to arcane_dump/ directory
         """
         self.arcane_dump_path = Path(arcane_dump_path)
-        self._validate_arcane_dump_layout()
 
-        # Disk index (id -> file path). Prevents slow recursive scans on-demand.
-        self._json_index: Dict[str, Dict[int, Path]] = {}
-        self._texture_index: Dict[int, Path] = {}
+        # asset type -> CacheArchive
+        self.archives: Dict[str, CacheArchive] = {}
+        self._open_archives()
 
         # Asset caches
         self.meshes: Dict[int, ArcMesh] = {}
@@ -58,93 +176,94 @@ class AssetManager:
         self.renders: Dict[int, ArcRender] = {}
         self.cobjects: Dict[int, ArcCObject] = {}
 
-        # Image cache for texture files
+        # Image cache for texture records
         self.texture_images: Dict[int, Image.Image] = {}
 
-        # Asset type paths
-        self.asset_paths = {
-            'mesh': self.arcane_dump_path / 'MESH',
-            'texture': self.arcane_dump_path / 'TEXTURE',
-            'skeleton': self.arcane_dump_path / 'SKELETON',
-            'motion': self.arcane_dump_path / 'MOTION',
-            'render': self.arcane_dump_path / 'RENDER',
-            'cobject': self.arcane_dump_path / 'COBJECTS',
-        }
+        # asset_id -> (type_code, name), populated lazily
+        self._cobject_summaries: Dict[int, Tuple[int, str]] = {}
 
-        self._build_disk_index()
+        # skeleton_id -> standing rotations, populated lazily (see stand_pose)
+        self._stand_poses: Dict[int, Dict[str, tuple]] = {}
+        # skeleton_id -> which rung of stand_pose answered, for reporting
+        self._stand_layers: Dict[int, str] = {}
 
-    def _build_disk_index(self) -> None:
+    # ------------------------------------------------------------------
+    # Archive discovery
+    # ------------------------------------------------------------------
+    def _open_archives(self) -> None:
         """
-        Build an index of asset_id -> file path.
+        Locate and index every required cache archive.
 
-        Notes:
-        - Some dumps (notably `COBJECTS/`) are nested by category (STATIC/ITEM/…).
-        - Indexing avoids repeated directory scans and makes startup state explicit.
-        """
-        def index_json(asset_type: str, recursive: bool) -> Dict[int, Path]:
-            asset_dir = self.asset_paths[asset_type]
-            if not asset_dir.exists():
-                return {}
-            pattern_iter = asset_dir.rglob("*.json") if recursive else asset_dir.glob("*.json")
-            out: Dict[int, Path] = {}
-            for p in pattern_iter:
-                try:
-                    out[int(p.stem)] = p
-                except ValueError:
-                    continue
-            return out
-
-        # JSON-backed asset types
-        self._json_index["mesh"] = index_json("mesh", recursive=False)
-        self._json_index["skeleton"] = index_json("skeleton", recursive=False)
-        self._json_index["motion"] = index_json("motion", recursive=False)
-        self._json_index["render"] = index_json("render", recursive=False)
-        self._json_index["cobject"] = index_json("cobject", recursive=True)
-
-        # Texture images (some dumps use .tga without JSON metadata)
-        tex_dir = self.asset_paths["texture"]
-        for ext in (".jpg", ".tga", ".png"):
-            for p in tex_dir.glob(f"*{ext}"):
-                try:
-                    self._texture_index[int(p.stem)] = p
-                except ValueError:
-                    continue
-
-    def _get_json_path(self, asset_type: str, asset_id: int) -> Optional[Path]:
-        by_id = self._json_index.get(asset_type, {})
-        return by_id.get(asset_id)
-
-    def get_source_path(self, asset_type: str, asset_id: int) -> Optional[str]:
-        """
-        Return the resolved on-disk path for an asset ID.
-
-        Useful for debugging and for higher-level catalog/index layers.
-        """
-        if asset_type == "texture":
-            p = self._texture_index.get(asset_id)
-            return str(p) if p else None
-        p = self._get_json_path(asset_type, asset_id)
-        return str(p) if p else None
-
-    def _validate_arcane_dump_layout(self) -> None:
-        """
-        Fail fast if the arcane_dump directory is missing or malformed.
-
-        This prevents a silent "empty UI" experience when paths are wrong.
+        Fails fast with a specific message so a wrong path surfaces as an error
+        rather than a silently empty UI.
         """
         if not self.arcane_dump_path.exists():
             raise FileNotFoundError(f"arcane_dump not found|path={self.arcane_dump_path}")
 
-        required_dirs = ("MESH", "TEXTURE", "SKELETON", "MOTION", "RENDER", "COBJECTS")
-        missing = [d for d in required_dirs if not (self.arcane_dump_path / d).exists()]
+        # Cache layouts vary (flat, or one folder per category), so match on stem.
+        found: Dict[str, Path] = {}
+        for path in self.arcane_dump_path.rglob("*.cache"):
+            found.setdefault(path.stem.lower(), path)
+
+        missing: List[str] = []
+        for asset_type, stems in self.CACHE_STEMS.items():
+            path = next((found[s] for s in stems if s in found), None)
+            if path is None:
+                missing.append(f"{asset_type}({'|'.join(stems)}.cache)")
+                continue
+            self.archives[asset_type] = CacheArchive(path)
+
         if missing:
             raise FileNotFoundError(
-                f"arcane_dump missing dirs|path={self.arcane_dump_path}|missing={','.join(missing)}"
+                f"arcane_dump missing caches|path={self.arcane_dump_path}|missing={','.join(missing)}"
             )
 
+    def has_asset(self, asset_type: str, asset_id: int) -> bool:
+        """
+        Check whether an ID is present, without reading or reporting a miss.
+
+        Asset graphs reference IDs that legitimately live in caches this dump
+        does not ship, so callers walking those references use this instead of
+        provoking a "missing" diagnostic per hop.
+        """
+        archive = self.archives.get(asset_type)
+        return archive is not None and asset_id in archive
+
+    def get_source_path(self, asset_type: str, asset_id: int) -> Optional[str]:
+        """
+        Return a human-readable location for an asset ID (`<cache>#<id>`).
+
+        Useful for debugging and for higher-level catalog/index layers.
+        """
+        if not self.has_asset(asset_type, asset_id):
+            return None
+        return f"{self.archives[asset_type].path.name}#{asset_id}"
+
+    def _load_record(self, asset_type: str, asset_id: int, cls, label: str):
+        """Read one record and run its binary parser."""
+        archive = self.archives.get(asset_type)
+        if archive is None:
+            return None
+
+        stream = archive.stream(asset_id)
+        if stream is None:
+            print(f"{label} missing|id={asset_id}")
+            return None
+
+        try:
+            obj = cls()
+            obj.load_binary(stream)
+            return obj
+        except Exception as e:
+            print(f"Error loading {label.lower()} {asset_id}: {e}")
+            return None
+
+    # ------------------------------------------------------------------
+    # Typed loaders
+    # ------------------------------------------------------------------
     def load_mesh(self, asset_id: int) -> Optional[ArcMesh]:
         """
-        Load mesh from JSON file.
+        Load mesh from the mesh cache.
 
         Args:
             asset_id: Mesh ID
@@ -155,26 +274,14 @@ class AssetManager:
         if asset_id in self.meshes:
             return self.meshes[asset_id]
 
-        json_path = self._get_json_path("mesh", asset_id)
-        if not json_path:
-            print(f"Mesh missing|id={asset_id}")
-            return None
-
-        try:
-            with open(json_path, 'r') as f:
-                data = json.load(f)
-
-            mesh = ArcMesh()
-            mesh.load_json(data)
+        mesh = self._load_record('mesh', asset_id, ArcMesh, "Mesh")
+        if mesh is not None:
             self.meshes[asset_id] = mesh
-            return mesh
-        except Exception as e:
-            print(f"Error loading mesh {asset_id}: {e}")
-            return None
+        return mesh
 
     def load_texture(self, asset_id: int) -> Optional[ArcTexture]:
         """
-        Load texture metadata (not the actual image).
+        Load texture metadata and pixel data.
 
         Args:
             asset_id: Texture ID
@@ -185,26 +292,17 @@ class AssetManager:
         if asset_id in self.textures:
             return self.textures[asset_id]
 
-        # Try JSON file first (not always present in dumps)
-        json_path = self.asset_paths['texture'] / f"{asset_id}.json"
-        if json_path.exists():
-            try:
-                with open(json_path, 'r') as f:
-                    data = json.load(f)
-
-                texture = ArcTexture()
-                texture.load_json(data)
-                self.textures[asset_id] = texture
-                return texture
-            except Exception as e:
-                print(f"Error loading texture metadata {asset_id}: {e}")
-
-        # If no JSON, return None (we'll just use the JPG directly)
-        return None
+        texture = self._load_record('texture', asset_id, ArcTexture, "Texture")
+        if texture is not None:
+            self.textures[asset_id] = texture
+        return texture
 
     def load_texture_image(self, asset_id: int) -> Optional[Image.Image]:
         """
-        Load texture image file (JPG).
+        Load a texture record as a PIL image.
+
+        Note: the Shadowbane mirror/rotate transform is *not* applied here;
+        TextureManager does that on upload.
 
         Args:
             asset_id: Texture ID
@@ -215,29 +313,83 @@ class AssetManager:
         if asset_id in self.texture_images:
             return self.texture_images[asset_id]
 
-        tex_dir = self.asset_paths['texture']
-        candidate_paths = [
-            tex_dir / f"{asset_id}.jpg",
-            tex_dir / f"{asset_id}.tga",
-            tex_dir / f"{asset_id}.png",
-        ]
-        image_path = next((p for p in candidate_paths if p.exists()), None)
-        if image_path is None:
-            print(f"Texture image missing|id={asset_id}|dir={tex_dir}")
+        texture = self.load_texture(asset_id)
+        if texture is None:
             return None
 
         try:
-            img = Image.open(image_path)
-            # Note: Transformation (mirror/rotate) will be applied in TextureManager
-            self.texture_images[asset_id] = img
-            return img
+            img = self._texture_to_image(texture)
         except Exception as e:
-            print(f"Texture image load error|id={asset_id}|err={e}")
+            print(f"Texture image decode error|id={asset_id}|err={e}")
             return None
+
+        if img is None:
+            return None
+
+        self.texture_images[asset_id] = img
+        return img
+
+    @staticmethod
+    def _texture_to_image(texture: ArcTexture) -> Optional[Image.Image]:
+        """Rebuild a PIL image from the raw pixel buffer in a texture record."""
+        key = (texture.image_color_depth, texture.image_alpha, texture.image_type)
+        mode = ArcTexture.VALUE_TO_MODE.get(key)
+        if mode is None:
+            print(
+                f"Texture mode unknown|depth={texture.image_color_depth}"
+                f"|alpha={texture.image_alpha}|type={texture.image_type}"
+            )
+            return None
+
+        size = (texture.image_width, texture.image_height)
+        expected = texture.image_width * texture.image_height * texture.image_color_depth
+        if len(texture.image_data) < expected:
+            print(f"Texture data short|have={len(texture.image_data)}|want={expected}")
+            return None
+
+        if mode == 'P':
+            # Palette records live in Palette.cache, which the dump does not
+            # ship; render the indices as greyscale rather than dropping the
+            # texture entirely.
+            return Image.frombytes('L', size, texture.image_data[:expected])
+
+        return Image.frombytes(mode, size, texture.image_data[:expected])
+
+    def save_texture_image(self, asset_id: int, dest_path: str) -> Optional[str]:
+        """
+        Write a texture record out as a standalone image file.
+
+        Textures live inside Textures.cache, so exporters that need a real file
+        on disk (OBJ/MTL, glTF) materialise one here. The Shadowbane mirror +
+        180° rotate is applied so the result matches the viewport.
+
+        Args:
+            asset_id: Texture ID
+            dest_path: Where to write the image
+
+        Returns:
+            The written path, or None on failure
+        """
+        img = self.load_texture_image(asset_id)
+        if img is None:
+            return None
+
+        img = ImageOps.mirror(img.rotate(180))
+        if img.mode not in ('RGB', 'RGBA'):
+            img = img.convert('RGB')
+
+        try:
+            dest = Path(dest_path)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            img.save(dest)
+        except Exception as e:
+            print(f"Texture export failed|id={asset_id}|dest={dest_path}|err={e}")
+            return None
+        return str(dest)
 
     def load_skeleton(self, asset_id: int) -> Optional[ArcSkeleton]:
         """
-        Load skeleton from JSON file.
+        Load skeleton from the skeleton cache.
 
         Args:
             asset_id: Skeleton ID
@@ -248,26 +400,14 @@ class AssetManager:
         if asset_id in self.skeletons:
             return self.skeletons[asset_id]
 
-        json_path = self._get_json_path("skeleton", asset_id)
-        if not json_path:
-            print(f"Skeleton missing|id={asset_id}")
-            return None
-
-        try:
-            with open(json_path, 'r') as f:
-                data = json.load(f)
-
-            skeleton = ArcSkeleton()
-            skeleton.load_json(data)
+        skeleton = self._load_record('skeleton', asset_id, ArcSkeleton, "Skeleton")
+        if skeleton is not None:
             self.skeletons[asset_id] = skeleton
-            return skeleton
-        except Exception as e:
-            print(f"Error loading skeleton {asset_id}: {e}")
-            return None
+        return skeleton
 
     def load_motion(self, asset_id: int) -> Optional[ArcMotion]:
         """
-        Load motion/animation from JSON file.
+        Load motion/animation from the motion cache.
 
         Args:
             asset_id: Motion ID
@@ -278,26 +418,353 @@ class AssetManager:
         if asset_id in self.motions:
             return self.motions[asset_id]
 
-        json_path = self._get_json_path("motion", asset_id)
-        if not json_path:
-            print(f"Motion missing|id={asset_id}")
-            return None
-
-        try:
-            with open(json_path, 'r') as f:
-                data = json.load(f)
-
-            motion = ArcMotion()
-            motion.load_json(data)
+        motion = self._load_record('motion', asset_id, ArcMotion, "Motion")
+        if motion is not None:
             self.motions[asset_id] = motion
-            return motion
-        except Exception as e:
-            print(f"Error loading motion {asset_id}: {e}")
+        return motion
+
+    def load_motion_pose(self, asset_id: int, frame: int = 0) -> Dict[str, tuple]:
+        """
+        One frame of a clip as bone name -> local (x, y, z, w) quaternion.
+
+        Feeds `ArcSkeleton.pose`. The cache's rest pose is a zero pose, so a
+        character only stands once a clip frame is laid over it. Clips animate a
+        subset of the skeleton — the bones absent here stay at rest.
+
+        Returns an empty map for metadata-only clips, which carry no frames.
+        """
+        motion = self.load_motion(asset_id)
+        frames = getattr(motion, 'frames', None) if motion else None
+        if not frames:
+            return {}
+
+        out: Dict[str, tuple] = {}
+        for name, track in (frames.get('bones') or {}).items():
+            rotations = track.get('rot') or []
+            if rotations:
+                out[name.upper()] = tuple(rotations[min(frame, len(rotations) - 1)])
+        return out
+
+    def stand_pose(self, skeleton_id: int) -> Dict[str, tuple]:
+        """
+        A clip frame that stands this skeleton up, or {} if none of its clips does.
+
+        The rest pose is already most of a standing figure: every limb hangs
+        straight down, which is where a still character's arms belong. Only the
+        feet are wrong, pointing at the floor. So a frame qualifies on geometry
+        — legs near vertical, feet near flat — and among those the one that
+        disturbs the rest pose least wins. Choosing on footing alone lets
+        through clips that stand perfectly well with their arms in the air.
+
+        Three body plans, tried in order and never in parallel: **upright** for
+        anything that can straighten its legs, **hunched** for a biped that
+        cannot, **grounded** for everything that is not standing on two legs at
+        all. Each is a fallback for the one before it, so widening the question
+        can never cost a rig the pose it already had.
+
+        Returning {} is the honest answer for the rigs whose clips are all
+        action: better the rest pose than a lunge frozen mid-swing.
+
+        Cached per skeleton; judging one costs a parse of each of its clips.
+        """
+        if skeleton_id in self._stand_poses:
+            return self._stand_poses[skeleton_id]
+
+        skeleton = self.load_skeleton(skeleton_id)
+        # Upright first, so a rig that reads as bipedal is never judged on the
+        # looser shape test. Only what that rejects falls through.
+        #
+        # Sampled at the same rate as every other rung. It used to probe frame 0
+        # alone, which judged bipeds on a sixth of the evidence the other paths
+        # get: two rigs had frames passing this very gate, untouched, and were
+        # sitting at rest because nobody had looked past the first frame of their
+        # clips. A clip does not put its calmest frame first.
+        layer = 'upright'
+        best = self._best_frame(skeleton, self._stance_ladder(self._stands_upright))
+        if not best:
+            if self._is_bipedal(skeleton):
+                # A biped that cannot straighten its legs. Tried after the
+                # upright gate and never instead of it, so a rig that already
+                # stands keeps the stance it had.
+                layer = 'hunched'
+                best = self._best_frame(skeleton,
+                                        self._stance_ladder(self._stands_hunched))
+            else:
+                # The shape test asks the body to be no taller than it is wide,
+                # which is true of a hound and false of anything standing on two
+                # legs — run it on a biped and the only frames that pass are the
+                # sprawled ones.
+                #
+                # Ask for settled forelimbs first and drop the requirement only
+                # if the rig has no such frame, so wanting better arms can never
+                # cost a rig the pose it already had.
+                layer = 'grounded+limbs'
+                best = self._calmest_frame(skeleton, self._rests_with_limbs_down,
+                                           samples=STAND_FRAME_SAMPLES)
+                if not best:
+                    layer = 'grounded'
+                    best = self._calmest_frame(skeleton, self._rests_on_ground,
+                                               samples=STAND_FRAME_SAMPLES)
+
+        self._stand_poses[skeleton_id] = best
+        self._stand_layers[skeleton_id] = layer if best else 'rest'
+        return best
+
+    def stand_layer(self, skeleton_id: int) -> str:
+        """
+        Which rung of `stand_pose` answered for this rig: upright, hunched,
+        grounded+limbs, grounded, or rest.
+
+        Reported by the code that made the choice rather than reconstructed by
+        the caller. A reporting tool that re-ran the gates itself would be a
+        second answer to the same question, and the two would drift the first
+        time a rung moved.
+        """
+        if skeleton_id not in self._stand_layers:
+            self.stand_pose(skeleton_id)
+        return self._stand_layers.get(skeleton_id, 'rest')
+
+    def _best_frame(self, skeleton, ladder) -> Dict[str, tuple]:
+        """The calmest frame the first satisfiable rung of `ladder` accepts."""
+        for accepts in ladder:
+            best = self._calmest_frame(skeleton, accepts, samples=STAND_FRAME_SAMPLES)
+            if best:
+                return best
+        return {}
+
+    def _calmest_frame(self, skeleton, accepts, samples: int) -> Dict[str, tuple]:
+        """The accepted frame that disturbs the rest pose least, or {} if none is."""
+        best: Dict[str, tuple] = {}
+        calmest = None
+
+        for token in sorted(set(getattr(skeleton, 'motion_tokens', None) or [])):
+            motion = self.load_motion(token)
+            data = getattr(motion, 'frames', None) if motion else None
+            if not data:
+                continue
+            total = max(1, data.get('frame_count') or 1)
+            if samples <= 1:
+                probes = (0,)
+            else:
+                probes = range(0, total, max(1, total // samples))
+
+            for frame in probes:
+                rotations = self.load_motion_pose(token, frame)
+                if not rotations or not accepts(skeleton, rotations):
+                    continue
+                # Feet are exempt from "calm": turning them is the whole point.
+                turns = [
+                    2.0 * math.acos(min(1.0, abs(q[3])))
+                    for name, q in rotations.items()
+                    if not any(k in name for k in STAND_FOOT_BONES)
+                ]
+                calm = sum(turns) / len(turns) if turns else 0.0
+                if calmest is None or calm < calmest:
+                    calmest, best = calm, rotations
+
+        return best
+
+    @staticmethod
+    def _stance_angles(segments: Dict[str, tuple]) -> Optional[Tuple[float, float]]:
+        """
+        Worst leg tilt off vertical and worst foot roll off horizontal, in degrees.
+
+        A leg points down (-Y); a foot lies in the ground plane. Both are taken
+        as the *worst* of their group, so one leg lifted mid-stride disqualifies
+        the frame however good the other one is.
+        """
+        legs, feet = [], []
+        for name, (direction, _tip) in segments.items():
+            if any(k in name for k in STAND_LEG_BONES):
+                legs.append(direction)
+            elif any(k in name for k in STAND_FOOT_BONES):
+                feet.append(direction)
+        if not legs or not feet:
             return None
+
+        def clamp(v):
+            return max(-1.0, min(1.0, v))
+
+        return (max(math.degrees(math.acos(clamp(-d[1]))) for d in legs),
+                max(math.degrees(math.asin(clamp(abs(d[1])))) for d in feet))
+
+    @staticmethod
+    def _body_shape(segments: Dict[str, tuple]) -> Tuple[float, float, float]:
+        """
+        Height, widest horizontal spread, and how far the feet sit above the lowest point.
+
+        The lift is a fraction of the height, so it means the same thing on a rat
+        and on a giant. With nothing to stand on — a snake — it is zero, which
+        lets a caller ask about it without first asking whether the creature has
+        feet.
+        """
+        tips = [tip for _direction, tip in segments.values()]
+        ys = [t[1] for t in tips]
+        height = max(ys) - min(ys)
+        spread = max(
+            max(t[0] for t in tips) - min(t[0] for t in tips),
+            max(t[2] for t in tips) - min(t[2] for t in tips),
+        )
+        ground = [
+            tip[1] for name, (_direction, tip) in segments.items()
+            if any(k in name for k in STAND_GROUND_BONES)
+        ]
+        lift = (min(ground) - min(ys)) / height if ground and height > 1e-6 else 0.0
+        return height, spread, lift
+
+    @classmethod
+    def _stands_upright(cls, skeleton, rotations: Dict[str, tuple]) -> bool:
+        """Whether a frame has this rig standing: legs under it, soles down."""
+        angles = cls._stance_angles(skeleton.posed_segments(rotations))
+        if angles is None:
+            return False
+        tilt, roll = angles
+        return tilt <= STAND_MAX_LEG_TILT and roll <= STAND_MAX_FOOT_TILT
+
+    @classmethod
+    def _stands_hunched(cls, skeleton, rotations: Dict[str, tuple]) -> bool:
+        """
+        Whether a frame has a permanently bent-legged biped standing.
+
+        Leg tilt alone cannot separate a crouch from a sprawl — a body lying on
+        its back with its knees up scores the same as an ogre. What separates
+        them is everything else about the silhouette, so a wider tilt is only
+        allowed alongside the three things a sprawl gets wrong: the feet stay
+        flat, the body stays taller than it is wide, and the feet stay the lowest
+        part of it.
+        """
+        segments = skeleton.posed_segments(rotations)
+        angles = cls._stance_angles(segments)
+        if angles is None:
+            return False
+        tilt, roll = angles
+        if tilt > STAND_MAX_HUNCH_TILT or roll > STAND_MAX_FOOT_TILT:
+            return False
+        height, spread, lift = cls._body_shape(segments)
+        return height > spread and lift <= STAND_MAX_GROUND_LIFT
+
+    @staticmethod
+    def _is_bipedal(skeleton) -> bool:
+        """
+        Whether the upright test is the right one to judge this rig by.
+
+        A biped carries its length in its legs; a hound, drake or viper carries
+        it in spine, neck and tail. Foot count catches the spider, whose eight
+        legs are long enough to read as bipedal on length alone.
+        """
+        legs = spine = 0.0
+        feet = 0
+        for bone in skeleton.bones:
+            if not bone.name:
+                continue
+            name = bone.name.upper()
+            if any(k in name for k in STAND_FOOT_BONES):
+                feet += 1
+            if name.startswith('R') and any(
+                k in name for k in STAND_LEG_BONES + STAND_FOOT_BONES
+            ):
+                legs += bone.length
+            if any(k in name for k in STAND_SPINE_BONES):
+                spine += bone.length
+
+        if feet > 2:
+            return False
+        return spine > 1e-6 and legs / spine >= STAND_BIPED_LEG_RATIO
+
+    @staticmethod
+    def _forelimbs_down(segments: Dict[str, tuple]) -> bool:
+        """Whether nothing that counts as a forelimb is being held up."""
+        return all(
+            direction[1] <= STAND_MAX_ARM_RISE
+            for name, (direction, _tip) in segments.items()
+            if any(k in name for k in STAND_ARM_BONES)
+        )
+
+    @staticmethod
+    def _feet_together(segments: Dict[str, tuple]) -> bool:
+        """
+        Whether the feet are under the body rather than stepping.
+
+        Measured in the ground plane and scaled by body height, so it means the
+        same thing on a rat and on a giant. A rig with fewer than two feet has
+        no stride to measure and passes.
+        """
+        feet = [tip for name, (_direction, tip) in segments.items()
+                if any(k in name for k in STAND_FOOT_BONES)]
+        tips = [tip for _direction, tip in segments.values()]
+        if len(feet) < 2 or not tips:
+            return True
+        ys = [t[1] for t in tips]
+        height = max(ys) - min(ys)
+        if height <= 1e-6:
+            return True
+        gap = max(math.dist((a[0], a[2]), (b[0], b[2])) for a in feet for b in feet)
+        return gap / height <= STAND_MAX_FOOT_GAP
+
+    @staticmethod
+    def _arms_hang(segments: Dict[str, tuple]) -> bool:
+        """Whether a biped's forelimbs hang rather than being held out or up."""
+        return all(
+            direction[1] <= STAND_MAX_BIPED_ARM_RISE
+            for name, (direction, _tip) in segments.items()
+            if any(k in name for k in STAND_ARM_BONES)
+        )
+
+    @classmethod
+    def _stance_ladder(cls, gate):
+        """
+        One stance gate as three, strictest first.
+
+        A stance gate asks where the legs and feet are, and a walk frame answers
+        every part of it correctly — both soles flat, both legs under the body.
+        What a walk gets wrong is what the gate does not ask: the feet are a
+        stride apart and an arm is swinging. Those are asked here instead, as
+        preferences rather than requirements.
+
+        Three rungs rather than one conjunction, because the two extra
+        conditions are not available together on every rig: some have frames
+        with the arms down and none with the feet also together, and folding
+        both into a single test drops such a rig all the way back to a swinging
+        arm to buy a stride it was never going to lose. Each rung can only be
+        reached by what the one above it rejected, so none of them can cost a
+        rig the pose it already had.
+        """
+        def still(skeleton, rotations):
+            segments = skeleton.posed_segments(rotations)
+            return (gate(skeleton, rotations) and cls._arms_hang(segments)
+                    and cls._feet_together(segments))
+
+        def arms_down(skeleton, rotations):
+            return (gate(skeleton, rotations)
+                    and cls._arms_hang(skeleton.posed_segments(rotations)))
+
+        return (still, arms_down, gate)
+
+    @classmethod
+    def _rests_with_limbs_down(cls, skeleton, rotations: Dict[str, tuple]) -> bool:
+        """Grounded, and not holding its forelimbs up."""
+        if not cls._rests_on_ground(skeleton, rotations):
+            return False
+        return cls._forelimbs_down(skeleton.posed_segments(rotations))
+
+    @classmethod
+    def _rests_on_ground(cls, skeleton, rotations: Dict[str, tuple]) -> bool:
+        """
+        Whether a frame has a non-bipedal rig settled on the ground.
+
+        Two things separate a real pose from the stacked rest pose: the body is
+        no taller than it is wide or long, and anything the creature stands on
+        is at the bottom of it. A snake has no feet, so only the first applies.
+        """
+        segments = skeleton.posed_segments(rotations)
+        if not segments:
+            return False
+        height, spread, lift = cls._body_shape(segments)
+        return height <= spread and lift <= STAND_MAX_GROUND_LIFT
 
     def load_render(self, asset_id: int) -> Optional[ArcRender]:
         """
-        Load render template from JSON file.
+        Load render template from the render cache.
 
         Args:
             asset_id: Render ID
@@ -308,26 +775,52 @@ class AssetManager:
         if asset_id in self.renders:
             return self.renders[asset_id]
 
-        json_path = self._get_json_path("render", asset_id)
-        if not json_path:
-            print(f"Render missing|id={asset_id}")
-            return None
-
-        try:
-            with open(json_path, 'r') as f:
-                data = json.load(f)
-
-            render = ArcRender()
-            render.load_json(data)
+        render = self._load_record('render', asset_id, ArcRender, "Render")
+        if render is not None:
             self.renders[asset_id] = render
-            return render
-        except Exception as e:
-            print(f"Error loading render {asset_id}: {e}")
+        return render
+
+    # ------------------------------------------------------------------
+    # CObjects
+    # ------------------------------------------------------------------
+    def get_cobject_summary(self, asset_id: int) -> Optional[Tuple[int, str]]:
+        """
+        Read just the type code and name off a COBJECT record.
+
+        The catalog needs these for all ~10k cobjects at startup; parsing only
+        the header avoids decoding every full object body.
+
+        Returns:
+            (type_code, name) or None if not found
+        """
+        cached = self._cobject_summaries.get(asset_id)
+        if cached is not None:
+            return cached
+
+        data = self.archives['cobject'].read(asset_id)
+        if data is None or len(data) < COBJECT_HEADER_SIZE:
             return None
+        if data[:4] != COBJECT_MAGIC:
+            print(f"CObject bad magic|id={asset_id}|magic={data[:4]!r}")
+            return None
+
+        type_code = struct.unpack_from("<I", data, 4)[0]
+        try:
+            name = ResStream(data[COBJECT_HEADER_SIZE:]).read_string()
+        except Exception:
+            name = ""
+
+        summary = (type_code, name)
+        self._cobject_summaries[asset_id] = summary
+        return summary
 
     def load_cobject(self, asset_id: int) -> Optional[ArcCObject]:
         """
-        Load CObject from JSON file.
+        Load a COBJECT record.
+
+        The record body is parsed by the concrete ArcObj subclass for its type
+        code, then normalised through ArcCObject so callers keep a single shape
+        (`render_ids`, `skeleton_id`, `name`, ...) regardless of object type.
 
         Args:
             asset_id: CObject ID
@@ -338,23 +831,38 @@ class AssetManager:
         if asset_id in self.cobjects:
             return self.cobjects[asset_id]
 
-        json_path = self._get_json_path("cobject", asset_id)
-        if not json_path:
+        data = self.archives['cobject'].read(asset_id)
+        if data is None:
             print(f"CObject missing|id={asset_id}")
+            return None
+        if len(data) < COBJECT_HEADER_SIZE or data[:4] != COBJECT_MAGIC:
+            print(f"CObject bad magic|id={asset_id}")
+            return None
+
+        type_code = struct.unpack_from("<I", data, 4)[0]
+        parser = COBJECT_TYPE_PARSERS.get(type_code)
+        if parser is None:
+            print(f"CObject unknown type|id={asset_id}|type={type_code}")
             return None
 
         try:
-            with open(json_path, 'r') as f:
-                data = json.load(f)
+            obj = parser()
+            obj.load_binary(ResStream(data[COBJECT_HEADER_SIZE:]))
+            fields = obj.save_json()
+            fields['obj_type'] = type_code
 
             cobject = ArcCObject()
-            cobject.load_json(data)
-            self.cobjects[asset_id] = cobject
-            return cobject
+            cobject.load_json(fields)
         except Exception as e:
             print(f"Error loading CObject {asset_id}: {e}")
             return None
 
+        self.cobjects[asset_id] = cobject
+        return cobject
+
+    # ------------------------------------------------------------------
+    # Listing
+    # ------------------------------------------------------------------
     def list_assets(self, asset_type: str) -> List[int]:
         """
         List all available asset IDs of a given type.
@@ -365,31 +873,25 @@ class AssetManager:
         Returns:
             List of asset IDs
         """
-        if asset_type not in self.asset_paths:
+        archive = self.archives.get(asset_type)
+        if archive is None:
             return []
-
-        if asset_type == "texture":
-            return sorted(self._texture_index.keys())
-
-        by_id = self._json_index.get(asset_type)
-        if not by_id:
-            return []
-        return sorted(by_id.keys())
+        return archive.ids()
 
     def get_texture_image_path(self, asset_id: int) -> Optional[str]:
         """
-        Get the file path to a texture image (JPG).
+        Get a location string for a texture record.
+
+        Textures live inside Textures.cache rather than as standalone files, so
+        this is `<cache>#<id>` rather than an openable path.
 
         Args:
             asset_id: Texture ID
 
         Returns:
-            Path to JPG file as string, or None if not found
+            Location string, or None if not found
         """
-        p = self._texture_index.get(asset_id)
-        if p is not None and p.exists():
-            return str(p)
-        return None
+        return self.get_source_path('texture', asset_id)
 
     def clear_cache(self):
         """Clear all cached assets."""
@@ -400,3 +902,9 @@ class AssetManager:
         self.renders.clear()
         self.cobjects.clear()
         self.texture_images.clear()
+        self._cobject_summaries.clear()
+
+    def close(self):
+        """Close every open cache archive handle."""
+        for archive in self.archives.values():
+            archive.close()
