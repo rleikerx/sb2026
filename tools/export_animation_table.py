@@ -34,10 +34,13 @@ visibly changes a character's swing. Joining it needs three files, because a pow
 not name an effect directly -- `Powers.cfg` names an ACTION, `PowerActions.cfg` says what
 that action applies, and only then does `Effects.cfg` say what it overrides.
 
-It mattered more than its size suggests: **31 of its 37 target ANIMIDs are named by no
+It mattered more than its size suggests: **33 of its 39 target ANIMIDs are named by no
 other source**, including the whole 400-420 run, so those clips were exported but
-unreachable through this bundle -- 684 (skeleton, ANIMID) pairs, every one of which
+unreachable through this bundle -- 714 (skeleton, ANIMID) pairs, every one of which
 resolves to a track file already on disk.
+
+A row is `[source, *targets]` and not a pair: 156 of the 1,345 lines name two
+replacements for one slot, `AnimOverride 92 321 322`.
 
 What it emits
 -------------
@@ -180,10 +183,19 @@ def effect_overrides(path: Path) -> Dict[str, Dict[str, Any]]:
         effect_id, name = block_head(lines)
         if effect_id is None:
             continue
-        body = "\n".join(lines)
-        pairs = [[int(a), int(b)]
-                 for a, b in re.findall(r"AnimOverride\s+(\d+)\s+(\d+)", body)]
-        out[effect_id] = {"name": name, "animOverrides": pairs}
+        # A row is `[source, *targets]`, variable length, because 156 of the 1,345 lines
+        # name two replacements for one slot -- `AnimOverride 92 321 322`. Reading a fixed
+        # pair drops the second silently, and it took ANIMIDs 322 and 324 with it, each of
+        # which resolves on 15 rigs.
+        rows = []
+        for line in lines:
+            fields = line.split()
+            if not fields or fields[0] != "AnimOverride":
+                continue
+            ids = [int(f) for f in fields[1:] if f.isdigit()]
+            if len(ids) >= 2:
+                rows.append(ids)
+        out[effect_id] = {"name": name, "animOverrides": rows}
     return out
 
 
@@ -256,8 +268,8 @@ def build_overrides(config: Path) -> Dict[str, Any]:
             "animOverrides": entry["animOverrides"],
             "powers": sorted(seen.values(), key=lambda u: u["power"]),
         }
-        for source, target in entry["animOverrides"]:
-            by_source[str(source)].append({"to": target, "effect": effect_id,
+        for row in entry["animOverrides"]:
+            by_source[str(row[0])].append({"to": row[1:], "effect": effect_id,
                                            "effectName": entry["name"],
                                            "powers": len(seen)})
 
@@ -265,7 +277,7 @@ def build_overrides(config: Path) -> Dict[str, Any]:
     # override ANIMID 105 and between them they name 4 distinct replacements, so a consumer
     # asking "what can play instead of 105" should not have to scan 61 rows to find out.
     source_rows = {
-        source: {"targets": sorted({row["to"] for row in rows}), "byEffect": rows}
+        source: {"targets": sorted({t for row in rows for t in row["to"]}), "byEffect": rows}
         for source, rows in sorted(by_source.items(), key=lambda kv: int(kv[0]))
     }
     return {"byEffect": by_effect, "bySourceAnimId": source_rows}
@@ -415,8 +427,9 @@ def main() -> int:
     # to be able to resolve; the source is only the slot being displaced.
     override_targets: Dict[int, set] = defaultdict(set)
     for effect_id, entry in overrides["byEffect"].items():
-        for _source, target in entry["animOverrides"]:
-            override_targets[target].add(entry["name"] or effect_id)
+        for row in entry["animOverrides"]:
+            for target in row[1:]:
+                override_targets[target].add(entry["name"] or effect_id)
 
     # -- items.json + models.json --------------------------------------
     cobjects = next(iter(sorted(dump.rglob("CObjects.cache"))), None)
@@ -547,8 +560,11 @@ def main() -> int:
     named_elsewhere = set().union(*(set(map(int, v)) for k, v in action_rows.items()
                                     if k != "animOverride")) if action_rows else set()
     only_here = sorted(set(override_targets) - named_elsewhere)
-    print(f"anim overrides: {len(overrides['byEffect'])} effects, "
-          f"{sum(len(e['animOverrides']) for e in overrides['byEffect'].values())} pairs, "
+    rows_total = sum(len(e["animOverrides"]) for e in overrides["byEffect"].values())
+    multi = sum(1 for e in overrides["byEffect"].values()
+                for row in e["animOverrides"] if len(row) > 2)
+    print(f"anim overrides: {len(overrides['byEffect'])} effects, {rows_total} rows "
+          f"({multi} naming more than one replacement), "
           f"{len(overrides['bySourceAnimId'])} source ids -> {len(override_targets)} targets")
     print(f"  {len(only_here)} target ANIMIDs are named by no other source: {only_here}")
     print(f"wrote {out}  in {time.time() - started:.1f}s")
