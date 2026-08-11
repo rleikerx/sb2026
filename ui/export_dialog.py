@@ -177,15 +177,15 @@ class ExportDialog(QDialog):
             QMessageBox.critical(self, "Export Error", "Failed to load mesh data.")
             return
 
-        # Get texture path if requested
+        # Materialise the texture next to the export; it lives inside
+        # Textures.cache, so the exporters have no file to reference otherwise.
         texture_path = None
         if include_texture and self.viewport.current_texture_id:
-            texture = self.asset_manager.load_texture(self.viewport.current_texture_id)
-            if texture:
-                # Get texture image path
-                texture_image_path = self.asset_manager.get_texture_image_path(self.viewport.current_texture_id)
-                if texture_image_path and Path(texture_image_path).exists():
-                    texture_path = texture_image_path
+            texture_id = self.viewport.current_texture_id
+            texture_path = self.asset_manager.save_texture_image(
+                texture_id,
+                str(Path(output_path).parent / f"texture_{texture_id}.png"),
+            )
 
         # Create progress dialog
         progress = QProgressDialog("Exporting mesh...", "Cancel", 0, 0, self)

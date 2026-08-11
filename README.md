@@ -20,35 +20,35 @@ A professional asset viewer for Shadowbane game assets with 3D rendering, skelet
 
 ### Prerequisites
 - Python 3.8 or higher
-- Access to the shadowbane/arcane_dump/ folder with extracted assets
+- An `arcane_dump/` folder holding the client's `*.cache` archives
+
+The viewer reads assets straight out of the cache archives — there is no
+extraction step and nothing is written to disk. `arcane_dump/` needs these
+seven files, in any folder layout (they are matched by filename):
+
+```
+CObjects.cache  CZone.cache  Mesh.cache  Motion.cache
+Render.cache    Skeleton.cache  Textures.cache
+```
 
 ### Setup
 
 1. **Create virtual environment**:
    ```bash
-   cd /Users/stevenhoff/dev/shadowbane
-   python3 -m venv viewer_env
-   source viewer_env/bin/activate  # On Windows: viewer_env\Scripts\activate
+   python -m venv viewer_env
+   viewer_env\Scripts\activate      # macOS/Linux: source viewer_env/bin/activate
    ```
 
 2. **Install dependencies**:
    ```bash
-   pip install -r shadowbane_viewer/requirements.txt
-   ```
-
-3. **Set PYTHONPATH** (important):
-   ```bash
-   export PYTHONPATH="/Users/stevenhoff/dev/shadowbane:$PYTHONPATH"
+   pip install -r requirements.txt
    ```
 
 ## Running the Viewer
 
 ```bash
-# Make sure you're in the virtual environment
-source viewer_env/bin/activate
-
-# Run the application
-python shadowbane_viewer/main.py
+viewer_env\Scripts\activate      # macOS/Linux: source viewer_env/bin/activate
+python main.py
 ```
 
 ## Usage
@@ -93,24 +93,25 @@ shadowbane_viewer/
 ├── rendering/                       # OpenGL rendering (Phase 2-3)
 ├── animation/                       # Animation system (Phase 3)
 ├── assets/                          # Asset management
-│   └── asset_manager.py            # Central asset loader
+│   ├── cache_archive.py            # Random-access *.cache reader
+│   ├── asset_manager.py            # Central asset loader
+│   └── asset_catalog.py            # COBJECT -> assembled asset graph
 └── export/                          # Export functionality (Phase 4)
 ```
 
 ## Troubleshooting
 
 ### "ModuleNotFoundError: No module named 'arcane'"
-Make sure PYTHONPATH is set:
-```bash
-export PYTHONPATH="/Users/stevenhoff/dev/shadowbane:$PYTHONPATH"
-```
+Run `main.py` from the repo root — it puts the repo on `sys.path` itself.
 
-### "No assets found"
-Verify that arcane_dump/ folder exists with extracted assets:
+### "arcane_dump missing caches"
+The startup dialog names which archives could not be found. Check that every
+`*.cache` file listed under Prerequisites is present somewhere beneath
+`arcane_dump/`:
 ```bash
-ls arcane_dump/
-# Should show: COBJECTS, CZONE, MESH, MOTION, RENDER, SKELETON, SOUND, TERRAIN, TEXTURE, TILE, VISUAL
+find arcane_dump -name '*.cache'
 ```
+`.cache.ver` files are version stamps, not archives — they don't count.
 
 ### PyQt6 installation issues
 If PyQt6 fails to install, try:

@@ -2,6 +2,16 @@
 .env
 arcane_dump/
 wpak/
+
+# Generated asset exports - regenerate with tools/, never commit (multi-GB)
+export_aegisfall/
+export_gltf/
+export_icons/
+export_textures/
+export_atlas/
+# One-creature verification exports written by pose/rest checks
+.resttest/
+.wingtest/
 # Python
 __pycache__/
 *.py[cod]

@@ -200,11 +200,18 @@ class OpenGLViewport(QOpenGLWidget):
                 shader.set_mat4("uModel", part.transform)
                 shader.set_mat4("uNormalMatrix", np.linalg.inv(part.transform).T)
 
+                # Mirrored limbs carry a negative determinant, which reverses
+                # triangle winding; without flipping the front face they would
+                # be culled away entirely.
+                glFrontFace(GL_CW if np.linalg.det(part.transform[:3, :3]) < 0 else GL_CCW)
+
                 tex_gl_id = None
                 if part.texture_id is not None:
                     tex_gl_id = self.texture_manager.load_texture(part.texture_id)
 
                 self.mesh_renderer.render_mesh(gpu_mesh, shader, tex_gl_id, bone_matrices)
+
+            glFrontFace(GL_CCW)
 
         elif self.current_mesh_id is not None and self.mesh_renderer:
             gpu_mesh = self.mesh_renderer.meshes.get(self.current_mesh_id)
