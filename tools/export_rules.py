@@ -30,12 +30,16 @@ Effects.cfg is looked up in the curve table, and any that does not resolve is re
 
 Movement in metres
 ------------------
-Speeds are in world units per second. At the 2.7411 units/m in `reference/` that is:
+Speeds are in world units per second. At the units/m `reference/summary.json` measures --
+2.5994 as of the joint-frame fix -- that is:
 
-    WALK        6.50 u/s   2.37 m/s    8.5 km/h
-    RUN        14.67 u/s   5.35 m/s   19.3 km/h
-    COMBATWALK  4.44 u/s   1.62 m/s    5.8 km/h
-    COMBATRUN  14.67 u/s   5.35 m/s   19.3 km/h
+    WALK        6.50 u/s   2.50 m/s    9.0 km/h
+    RUN        14.67 u/s   5.64 m/s   20.3 km/h
+    COMBATWALK  4.44 u/s   1.71 m/s    6.1 km/h
+    COMBATRUN  14.67 u/s   5.64 m/s   20.3 km/h
+
+The metre column is only as good as that scale, and the scale moves when the pose does, so
+it is read from `reference/` at run time rather than pinned in this file.
 
 so combat mode costs you your walk but not your run. `DefaultSpeeds.cfg` also keeps the
 previous tuning commented out above the live values -- `WALKSPEED 6.88`, `RUNSPEED 15.52`
@@ -72,7 +76,46 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-UNITS_PER_METRE = 2.7411
+# The metre scale is measured, not fixed: `measure_assets.py` derives it from the Human
+# model's height and it moves whenever the pose does. It moved by 5.2% when the joint frame
+# landed -- 2.7411 to 2.5994 -- because the pose it had been measured from leaned backwards.
+# So it is read from `reference/summary.json` rather than pinned here, and the fallback is
+# only for a tree where that has not been generated yet. Which one was used is recorded in
+# the output.
+FALLBACK_UNITS_PER_METRE = 2.5994
+
+
+def units_per_metre(export_root: Path):
+    """(value, source) from reference/summary.json, or the fallback."""
+    summary = export_root / "reference" / "summary.json"
+    if summary.exists():
+        try:
+            data = json.loads(summary.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            data = None
+        found = _find_scale(data)
+        if found:
+            return found, "reference/summary.json"
+    return FALLBACK_UNITS_PER_METRE, "fallback constant"
+
+
+def _find_scale(node):
+    """The units-per-metre figure wherever summary.json happens to nest it."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if isinstance(value, (int, float)) and "metre" in key.lower():
+                return float(value)
+            found = _find_scale(value)
+            if found:
+                return found
+    elif isinstance(node, list):
+        for value in node:
+            found = _find_scale(value)
+            if found:
+                return found
+    return None
+
+
 CURVE_ARITY = {"FlatLine": 0, "SlopedLine": 1, "SlopedInitValLine": 1}
 
 
@@ -95,7 +138,7 @@ def number(text: str):
         return text
 
 
-def read_speeds(path: Path) -> Dict[str, Any]:
+def read_speeds(path: Path, per_metre: float) -> Dict[str, Any]:
     """Live speeds, and the commented-out ones they replaced."""
     live: Dict[str, float] = {}
     superseded: Dict[str, float] = {}
@@ -107,7 +150,7 @@ def read_speeds(path: Path) -> Dict[str, Any]:
             target[found.group(1)] = float(found.group(2))
     return {
         "unitsPerSecond": live,
-        "metresPerSecond": {k: round(v / UNITS_PER_METRE, 4) for k, v in live.items()},
+        "metresPerSecond": {k: round(v / per_metre, 4) for k, v in live.items()},
         "supersededUnitsPerSecond": superseded,
         "note": ("Defaults. `content/races.json` carries per-race overrides and those win. "
                  "Combat mode lowers the walk and leaves the run alone."),
@@ -254,7 +297,8 @@ def main() -> int:
 
     problems: List[Dict[str, Any]] = []
     curves = read_curves(config / "CompoundCurves.cfg", problems)
-    speeds = read_speeds(config / "DefaultSpeeds.cfg")
+    per_metre, scale_source = units_per_metre(out.parent)
+    speeds = read_speeds(config / "DefaultSpeeds.cfg", per_metre)
     recovery = read_recovery(config / "RecoveryRates.cfg")
     mod_types = read_mod_types(config / "ModTypes.cfg")
     skills = read_skills(config / "Skills.cfg")
@@ -274,8 +318,9 @@ def main() -> int:
                  "`curves` resolves the SL####Up tokens those files carry as strings; "
                  "`modTypes` names the verbs in effects.json's `mods`; `speeds` is in "
                  "world units per second, with metres alongside at "
-                 + str(UNITS_PER_METRE) + " units/m."),
-        "unitsPerMetre": UNITS_PER_METRE,
+                 + str(per_metre) + " units/m."),
+        "unitsPerMetre": per_metre,
+        "unitsPerMetreSource": scale_source,
         "counts": {
             "curves": len(curves),
             "modTypes": len(mod_types),

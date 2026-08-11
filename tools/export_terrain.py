@@ -25,7 +25,9 @@ So a sample maps to world height as
 
 and to a world position as `x_size / width` units per pixel. `min_y`/`max_y` read 0 and 800
 on all 178, so the greyscale ramp is 0..800 world units -- **0 to 292 m** at the 2.7411
-units/m in `reference/`, which is this world's ceiling on terrain elevation.
+units/m that `reference/` measures, which is this world's ceiling on terrain
+elevation. That scale moves when the pose does, so it is read at run time rather than
+pinned here.
 
 Two things are reported rather than smoothed over:
 
@@ -73,9 +75,44 @@ from arcane.zones.ArcZone import ArcZone
 from assets.asset_manager import AssetManager
 from assets.cache_archive import CacheArchive
 
-# From reference/summary.json. Stated here so the metre column is reproducible rather than
-# depending on that file having been generated.
-UNITS_PER_METRE = 2.7411
+# The metre scale is measured, not fixed: `measure_assets.py` derives it from the Human
+# model's height and it moves whenever the pose does. It moved by 5.2% when the joint frame
+# landed -- 2.7411 to 2.5994 -- because the pose it had been measured from leaned backwards.
+# So it is read from `reference/summary.json` rather than pinned here, and the fallback is
+# only for a tree where that has not been generated yet. Which one was used is recorded in
+# the output.
+FALLBACK_UNITS_PER_METRE = 2.5994
+
+
+def units_per_metre(export_root: Path):
+    """(value, source) from reference/summary.json, or the fallback."""
+    summary = export_root / "reference" / "summary.json"
+    if summary.exists():
+        try:
+            data = json.loads(summary.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            data = None
+        found = _find_scale(data)
+        if found:
+            return found, "reference/summary.json"
+    return FALLBACK_UNITS_PER_METRE, "fallback constant"
+
+
+def _find_scale(node):
+    """The units-per-metre figure wherever summary.json happens to nest it."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if isinstance(value, (int, float)) and "metre" in key.lower():
+                return float(value)
+            found = _find_scale(value)
+            if found:
+                return found
+    elif isinstance(node, list):
+        for value in node:
+            found = _find_scale(value)
+            if found:
+                return found
+    return None
 
 
 def zone_terrain(dump: Path) -> List[Dict[str, Any]]:
@@ -125,6 +162,7 @@ def main() -> int:
     dump, out = Path(args.dump), Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     manager = AssetManager(str(dump))
+    per_metre, scale_source = units_per_metre(out.parent.parent)
 
     rows = zone_terrain(dump)
     imaged = [r for r in rows if r["image"]]
@@ -200,7 +238,7 @@ def main() -> int:
             "source": source,
             **({"maxChannelDelta": channel_delta} if channel_delta else {}),
             "heightSpanUnits": span,
-            "heightSpanMetres": round(span / UNITS_PER_METRE, 2),
+            "heightSpanMetres": round(span / per_metre, 2),
             "sampleToHeight": "y = minY + (grey / 255) * (maxY - minY)",
         })
 
@@ -213,7 +251,8 @@ def main() -> int:
                  "image and sit at `flatHeight`. `source` says whether the record was "
                  "8-bit or a 24-bit texture the red channel was taken from. Do not upscale "
                  "these -- it invents elevations between samples."),
-        "unitsPerMetre": UNITS_PER_METRE,
+        "unitsPerMetre": per_metre,
+        "unitsPerMetreSource": scale_source,
         "counts": {
             "zonesWithTerrainGen": len(rows),
             "zonesWithHeightmap": len(imaged),
