@@ -4,7 +4,12 @@ arcane_dump/
 wpak/
 
 # Generated asset exports - regenerate with tools/, never commit (multi-GB)
-export_aegisfall/
+# The bundles are excluded by their *contents* rather than as a directory, because git
+# cannot re-include a file whose parent directory is excluded -- and the consumer guide
+# is worth tracking. It is prose, not a generated bundle: it is the entry point a fresh
+# integration starts from, and it is useless to anyone who does not have this checkout.
+export_aegisfall/*
+!export_aegisfall/README.md
 export_gltf/
 export_icons/
 export_textures/
