@@ -352,6 +352,52 @@ class ArcSkeleton(object):
             )
         return out
 
+    def node_hierarchy(self, rotations=None):
+        """
+        The same pose as a tree: bone name -> (parent name, local 4x4, flip).
+
+        `pose` hands back every joint already resolved into model space, which
+        is what you want to place a mesh and the wrong thing to write into a
+        scene file. This gives each bone's transform *relative to its parent*,
+        so a consumer can drive the rig itself — walk the tree and the chain
+        reproduces `pose` exactly, or replace a rotation and the limb below it
+        follows.
+
+        A bone's local transform is its parent's own length along its parent's
+        direction, then this bone's rotation. Matrices are row-major 16-float
+        lists, matching `bind_pose_matrix`. Order is the file's, parents first.
+        """
+        rotations = rotations or {}
+        out = OrderedDict()
+
+        for i, bone in enumerate(self.bones):
+            if not bone.name:
+                continue
+
+            parent = None
+            offset = (0.0, 0.0, 0.0)
+            if 0 <= bone.parent_index < i:
+                parent_bone = self.bones[bone.parent_index]
+                if parent_bone.name:
+                    parent = parent_bone.name.upper()
+                dx, dy, dz = parent_bone.direction
+                offset = (dx * parent_bone.length,
+                          dy * parent_bone.length,
+                          dz * parent_bone.length)
+
+            local = rotations.get(bone.name.upper())
+            r = _quat_to_mat(local) if local else IDENTITY_3X3
+            out[bone.name.upper()] = (
+                parent,
+                [r[0], r[1], r[2], offset[0],
+                 r[3], r[4], r[5], offset[1],
+                 r[6], r[7], r[8], offset[2],
+                 0.0, 0.0, 0.0, 1.0],
+                int(getattr(bone, 'flip', 0) or 0),
+            )
+
+        return out
+
     # ────────────────────────── json ──────────────────────────
 
     def load_json(self, data):
