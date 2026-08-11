@@ -10,6 +10,12 @@ wpak/
 # integration starts from, and it is useless to anyone who does not have this checkout.
 export_aegisfall/*
 !export_aegisfall/README.md
+# The animation bundle's own guide needs three lines, not one: git will not descend into an
+# excluded directory, so `animations/` has to be re-included before anything inside it can
+# be, and its contents then excluded again.
+!export_aegisfall/animations/
+export_aegisfall/animations/*
+!export_aegisfall/animations/README.md
 export_gltf/
 export_icons/
 export_textures/
