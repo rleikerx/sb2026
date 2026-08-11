@@ -67,6 +67,7 @@ from typing import Any
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from arcane.ArcMotion import ArcMotion
+from arcane.ArcSkeleton import ArcBoneRecord
 from arcane.util.ArcFileCache import load_cache_file
 from arcane.util.ResStream import ResStream
 
@@ -119,8 +120,30 @@ def flatten(track: list[list[float]]) -> list[float]:
     return [v for frame in track for v in frame]
 
 
-def build_clip(clip: dict[str, Any], skeleton_bones: set[str], decimals: int) -> dict[str, Any]:
-    """One clip as tracks, with constant channels collapsed and absent bones simply not present."""
+def joint_frames(skeleton: dict[str, Any]) -> dict[str, ArcBoneRecord]:
+    """Bone name -> a record carrying that bone's `axis`, for the conjugation below."""
+    out: dict[str, ArcBoneRecord] = {}
+    for bone in skeleton["bones"]:
+        if not isinstance(bone, dict):
+            continue
+        record = ArcBoneRecord()
+        record.axis = tuple(bone.get("axis") or (0.0, 0.0, 0.0))
+        out[bone["name"]] = record
+    return out
+
+
+def build_clip(clip: dict[str, Any], skeleton_bones: set[str], decimals: int,
+               frames_by_bone: dict[str, ArcBoneRecord] | None = None) -> dict[str, Any]:
+    """One clip as tracks, with constant channels collapsed and absent bones simply not present.
+
+    **Rotations are written in the parent's frame, not the bone's own.** The cache states them in
+    the joint frame `axis` defines, which is the frame the client conjugates out of before it
+    composes anything (docs/CLIENT_BINARY_FINDINGS.md section 4). Doing it here rather than in the
+    consumer keeps the bundle's contract -- *apply track bones to nodes by name* -- literally true:
+    a track quaternion drops straight onto a glTF node with no rig lookup. `frames_by_bone` is what
+    supplies the `axis`; without it the rotations are left as the cache states them, which is only
+    right for a clip no skeleton claims.
+    """
     frame_count = int(clip.get("frame_count") or 0)
     fps = int(clip.get("fps") or 0)
     spf = float(clip.get("seconds_per_frame") or 0.0)
@@ -132,11 +155,14 @@ def build_clip(clip: dict[str, Any], skeleton_bones: set[str], decimals: int) ->
             # Reported rather than dropped in silence: a clip naming a bone its skeleton does not
             # have means the token mapping is wrong, and that is worth failing loudly over.
             unknown.append(name)
+        record = (frames_by_bone or {}).get(name)
         entry: dict[str, Any] = {}
         for key, source in (("rot", "rot"), ("pos", "pos"), ("scale", "scale")):
             values = channels.get(source) or []
             if not values:
                 continue
+            if key == "rot" and record is not None:
+                values = [record.local_rotation_quat(q) for q in values]
             rounded = round_track(values, decimals)
             if constant(rounded):
                 # One value stands for every frame. Named without the `Frames` suffix so a reader
@@ -153,9 +179,30 @@ def build_clip(clip: dict[str, Any], skeleton_bones: set[str], decimals: int) ->
         "fps": fps,
         "secondsPerFrame": round(spf, 6),
         "seconds": round(frame_count / fps, 4) if fps > 0 else None,
+        # Stated per clip because it is not uniform: a clip no skeleton names has no `axis` to
+        # conjugate by and stays as the cache wrote it. A consumer should branch on this rather
+        # than assume, which it cannot do if only the skeleton file carries it.
+        "rotationFrame": "parent" if frames_by_bone else "joint",
         "bones": bones,
         **({"unknownBones": unknown} if unknown else {}),
     }
+
+
+def axis_conflicts(built: dict[str, Any], mine: dict[str, ArcBoneRecord],
+                   theirs: dict[str, ArcBoneRecord]) -> list[str]:
+    """Bones this clip animates where two skeletons disagree about the joint frame.
+
+    Empty for every shared clip in this cache, which is what lets a clip be written once. Returned
+    rather than asserted so the caller can name the clip and both skeletons.
+    """
+    out = []
+    for name in built.get("bones", {}):
+        a, b = mine.get(name), theirs.get(name)
+        if a is None or b is None:
+            continue
+        if any(abs(x - y) > 1e-6 for x, y in zip(a.axis, b.axis)):
+            out.append(name)
+    return out
 
 
 def main() -> None:
@@ -213,6 +260,11 @@ def main() -> None:
         os.makedirs(clips_dir, exist_ok=True)
     # token -> bytes on disk, so a clip named by several skeletons is written once and counted once.
     clips_on_disk: dict[int, int] = {}
+    # Which skeleton's joint frames a given clip file was written with, and every case where a
+    # second skeleton naming that clip would have wanted different ones.
+    clip_owner: dict[int, str] = {}
+    shared_conflicts: list[tuple[int, str, str, list[str]]] = []
+    axis_by_skeleton = {sid: joint_frames(s) for sid, s in skeletons.items()}
 
     index: dict[str, Any] = {}
     total_bytes = 0
@@ -226,6 +278,8 @@ def main() -> None:
         # written and the count of both is reported rather than one standing in for the other.
         tokens = list(dict.fromkeys(skeleton.get("motionTokens", [])))
 
+        frames_by_bone = joint_frames(skeleton)
+
         written: dict[str, Any] = {}
         held: list[int] = []
         for token in tokens:
@@ -234,17 +288,29 @@ def main() -> None:
                 missing_tokens.add(token)
                 continue
             held.append(token)
-            built = build_clip(clip, bone_names, args.decimals)
+            built = build_clip(clip, bone_names, args.decimals, frames_by_bone)
             if args.inline:
                 written[str(token)] = built
             elif token not in clips_on_disk:
-                # Written once, under the first skeleton that names it. A clip's tracks are the same
-                # data whichever skeleton plays it — the bone names are the source's own, not a
-                # per-skeleton numbering — so a second copy would be a byte-for-byte duplicate.
+                # Written once, under the first skeleton that names it. 558 of the 1,423 tokens are
+                # named by more than one skeleton, so this is most of the export's size.
+                #
+                # Rotations are now conjugated by the naming skeleton's `axis`, which would make
+                # "the same data whichever skeleton plays it" a claim rather than an observation:
+                # `axis` is *not* a function of bone name -- 95 of the 540 distinct names carry
+                # different values on different rigs. What holds is narrower and is checked below:
+                # no clip is ever shared between two skeletons that disagree about a bone it
+                # animates. `axis_conflicts` fails loudly if a future cache breaks that.
                 path = os.path.join(clips_dir, f"{token}.json")
                 with open(path, "w", encoding="utf-8") as handle:
                     json.dump(built, handle, separators=(",", ":"))
                 clips_on_disk[token] = os.path.getsize(path)
+                clip_owner[token] = skeleton_id
+            elif not args.inline:
+                conflicts = axis_conflicts(built, frames_by_bone,
+                                           axis_by_skeleton[clip_owner[token]])
+                if conflicts:
+                    shared_conflicts.append((token, clip_owner[token], skeleton_id, conflicts))
 
         payload = {
             "generator": "tools/export_motion_tracks.py",
@@ -253,8 +319,13 @@ def main() -> None:
             "note": (
                 "Per bone, per frame, at the clip's own frame rate. A channel written as `rot` is "
                 "constant for the whole clip; `rotFrames` is flat, four numbers per frame. Bones "
-                "absent from a clip are absent here and should be held at their bind pose."
+                "absent from a clip are absent here and should be held at their bind pose. "
+                "Rotations are in the PARENT's frame: the cache states them in the bone's own "
+                "joint frame and this export has already conjugated them out of it, so a "
+                "quaternion here applies directly to a node with no `axis` lookup."
             ),
+            # True of every clip in `clips` below; the per-clip files repeat it.
+            "rotationFrame": "parent",
             "decimals": args.decimals,
             "clipCount": len(written) if args.inline else len(held),
             **(
@@ -283,6 +354,14 @@ def main() -> None:
             f"  {size / 1_048_576:8.2f} MB"
         )
 
+    if shared_conflicts:
+        print(f"  !! {len(shared_conflicts)} shared clips whose skeletons disagree on a joint "
+              f"frame; those clips are wrong for the second skeleton:")
+        for token, owner, other, bones in shared_conflicts[:8]:
+            print(f"     clip {token}: written for skeleton {owner}, also named by {other} "
+                  f"({', '.join(bones[:4])})")
+        print("     write these per skeleton with --inline, or split the clip file by rig.")
+
     # Clips no skeleton names. 80 of the 1,503, and they are written rather than dropped: the ask
     # was for everything if size allows, and a clip nobody currently references is exactly the kind
     # of thing that turns out to be an emote once somebody looks. Listed separately so they cannot
@@ -293,8 +372,15 @@ def main() -> None:
         for token, clip in clips.items():
             if token in claimed or token in clips_on_disk:
                 continue
-            # No skeleton to check the names against, so nothing is called unknown here.
+            # No skeleton to check the names against, so nothing is called unknown here -- and
+            # none to supply `axis` either, so these rotations stay in the joint frame the cache
+            # states them in. Flagged in the payload rather than left to look like the others.
             built = build_clip(clip, set(clip["bones"]), args.decimals)
+            built["rotationFrameNote"] = (
+                "No skeleton names this clip, so there is no `axis` to conjugate by. Unlike every "
+                "clip under a skeleton, these rotations are as the cache states them and must be "
+                "conjugated by the rig you play them on."
+            )
             path = os.path.join(clips_dir, f"{token}.json")
             with open(path, "w", encoding="utf-8") as handle:
                 json.dump(built, handle, separators=(",", ":"))

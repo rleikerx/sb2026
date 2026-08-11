@@ -46,6 +46,32 @@ def _mat_transpose(m):
     return (m[0], m[3], m[6], m[1], m[4], m[7], m[2], m[5], m[8])
 
 
+def _quat_mul(a, b):
+    """(x, y, z, w) * (x, y, z, w), same order convention as `_mat_mul`."""
+    ax, ay, az, aw = a
+    bx, by, bz, bw = b
+    return (aw * bx + ax * bw + ay * bz - az * by,
+            aw * by - ax * bz + ay * bw + az * bx,
+            aw * bz + ax * by - ay * bx + az * bw,
+            aw * bw - ax * bx - ay * by - az * bz)
+
+
+def _euler_to_quat(v):
+    """
+    Radian (x, y, z) triple -> (x, y, z, w), composed Z then Y then X.
+
+    The quaternion twin of `_euler_to_mat`, and the form the client actually
+    computes in: `MakeTripleRotate` returns a quaternion and the setup pass
+    stores it as one. Kept alongside the matrix version rather than derived from
+    it so neither has to round-trip through the other.
+    """
+    hx, hy, hz = v[0] * 0.5, v[1] * 0.5, v[2] * 0.5
+    qx = (math.sin(hx), 0.0, 0.0, math.cos(hx))
+    qy = (0.0, math.sin(hy), 0.0, math.cos(hy))
+    qz = (0.0, 0.0, math.sin(hz), math.cos(hz))
+    return _quat_mul(_quat_mul(qz, qy), qx)
+
+
 def _euler_to_mat(v):
     """
     Radian (x, y, z) triple -> row-major 3x3, composed Z then Y then X.
@@ -166,6 +192,20 @@ class ArcBoneRecord(object):
             return rotation
         frame = self.joint_frame()
         return _mat_mul(_mat_mul(frame, rotation), _mat_transpose(frame))
+
+    def local_rotation_quat(self, quaternion):
+        """
+        `local_rotation` without the detour through a matrix: quaternion in,
+        quaternion out, `C * R * C^-1`.
+
+        For exporters that hand a consumer rotations rather than positions. The
+        matrix form is what `pose` wants; this is what a glTF track wants.
+        """
+        if not any(self.axis):
+            return tuple(quaternion)
+        frame = _euler_to_quat(self.axis)
+        inverse = (-frame[0], -frame[1], -frame[2], frame[3])
+        return _quat_mul(_quat_mul(frame, tuple(quaternion)), inverse)
 
     def clip_rotation(self, matrix):
         """
