@@ -15,6 +15,21 @@ Emits:
 Sizes are in raw cache units. `summary.json` also reports the median human
 height, which is the natural yardstick for converting to metres.
 
+**A creature is measured standing, not at bind pose.** This calls
+`AssetCatalog.assemble()` with no pose argument, and that stands creatures on
+their skeleton's calmest standing clip frame; only a rig whose clips are all
+action keeps the rest pose, and nothing outside `kind == Creature` is rigged at
+all. So every creature row here -- and therefore `units_per_metre`, which is
+derived from one of them -- depends on the pose math being right.
+
+It has not always been. On 11 Aug 2026 the ASF joint frame landed and this file
+moved `units_per_metre` from 2.7411 to 2.5994, because the Human it measures had
+been standing on its toes: the cache's rest pose points the foot straight down,
+so the bottom of the bounding box sat 0.310 units below where a flat-footed
+figure stands. `summary.json` records `human_pose_layer` for that reason -- the
+yardstick is only as good as the stance it was taken from, and a reader should
+be able to see which one that was. See `dev_log/081126.md`.
+
 Usage:
     python tools/measure_assets.py --out export_aegisfall/reference
 """
@@ -130,7 +145,7 @@ class Measurer:
 
         # --- apply the scales the COBJECT record carries -----------------------------------
         #
-        # **The bind-pose envelope is not the in-world size**, and every figure this tool wrote
+        # **The mesh envelope is not the in-world size**, and every figure this tool wrote
         # before now was the unscaled mesh. Two fields change it:
         #
         #   obj_scale          a uniform multiplier; unit for all but 17 assets, all weapons
@@ -220,16 +235,22 @@ def main() -> int:
     #
     # This used to take the median height of all 2,380 creatures. That worked only because the
     # sizes were unscaled and therefore all much of a muchness. Now that `rune_scale_factor` is
-    # applied the same statistic reads 7.632 units — the median of a bestiary containing giants
-    # and dragons, which is not a yardstick for 1.8 m and would put the world at 4.24 units/m.
+    # applied the same statistic reads 5.579 units — the median of a bestiary containing giants
+    # and dragons, which is not a yardstick for 1.8 m and would put the world at 3.10 units/m.
     #
-    # Measured against the playable races instead: Human 4.934, Dwarf 4.055, Aracoix 8.685 (winged
-    # and tall), median 5.437. Human is the one 1.8 m actually describes, so it leads; the median
-    # and the bestiary figure are both reported so the choice is visible rather than buried.
+    # Measured against the playable races instead: Human 4.679, Dwarf 3.880, Aracoix 4.649,
+    # median 5.049. Human is the one 1.8 m actually describes, so it leads; the median and the
+    # bestiary figure are both reported so the choice is visible rather than buried.
+    #
+    # The Aracoix is worth a second look, because it used to read 8.685 here and was the tallest
+    # playable race by a wide margin. That was its wings standing above its head while the pose
+    # math ignored the joint frame. Folded, it measures what a Human measures — which is what a
+    # humanoid body should, and a reminder that a number this file reports can be a pose defect
+    # wearing a plausible value.
     # ------------------------------------------------------------------------------------
     # **Lowest asset id wins.** The source ships most races twice — `2011_Human` and `2012_Human`,
     # a male body and a female one — so a plain name->row dict keeps whichever came last and
-    # measured the Human at 4.192 units instead of 4.934. Aegisfall's own `stage-bodies.ts` made
+    # measured the Human at 4.067 units instead of 4.679. Aegisfall's own `stage-bodies.ts` made
     # this same choice for the same reason; matching it keeps the two repos on one yardstick.
     by_name: dict = {}
     for r in rows:
@@ -247,6 +268,13 @@ def main() -> int:
     if races:
         human = by_name.get("Human")
         race_median = float(np.median([r["height"] for r in races]))
+        # Which stance the yardstick was taken from, read back from the manager rather than
+        # assumed. 'rest' here would mean the Human was measured toes-down and the scale is
+        # ~5% too small, which is exactly the failure this file shipped with until 11 Aug.
+        human_layer = None
+        if human and human.get("skeleton_id"):
+            am.stand_pose(human["skeleton_id"])
+            human_layer = getattr(am, "_stand_layers", {}).get(human["skeleton_id"])
         summary["_scale_reference"] = {
             "units_per_metre": round((human["height"] if human else race_median) / 1.8, 4),
             "basis": "Human" if human else "median of the playable races",
@@ -256,10 +284,16 @@ def main() -> int:
             "per_race_units": {r["name"]: round(r["height"], 3) for r in races},
             "all_creature_median_units": round(
                 float(np.median([r["height"] for r in creatures])), 3) if creatures else None,
-            "note": "Heights are bind-pose and now include obj_scale and rune_scale_factor. "
-                    "Divide a size by units_per_metre for an approximate metre value. The "
-                    "all-creature median is reported for context only — it spans giants and "
-                    "dragons and is not a human yardstick.",
+            "human_pose_layer": human_layer,
+            "note": "Creature heights are measured STANDING, on the calmest standing clip "
+                    "frame each rig has — not at bind pose, which points the feet at the "
+                    "floor and stands the figure on its toes. `human_pose_layer` names the "
+                    "stance the yardstick was taken from. Sizes include obj_scale and "
+                    "rune_scale_factor. Divide by units_per_metre for an approximate metre "
+                    "value, and re-read this figure rather than copying it: it is derived "
+                    "from a posed model and has moved twice. The all-creature median is "
+                    "reported for context only — it spans giants and dragons and is not a "
+                    "human yardstick.",
         }
 
     with (out_dir / "summary.json").open("w", encoding="utf-8") as f:
