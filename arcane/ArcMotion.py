@@ -79,15 +79,25 @@ class ArcMotion:
                         rz = stream.read_float()
                         rw = stream.read_float()
                         sx, sy, sz = stream.read_tuple()
-                        # Apply quaternion component remap seen in C++
-                        # old = (rx, ry, rz, rw)
+                        # The four floats are a `math::Quaternion` written out
+                        # field for field, and that class is scalar-first: see
+                        # `Quaternion::MakeRotateX` in Math.dll, which puts
+                        # cos(a/2) at offset 0 and sin(a/2) at offset 4. So the
+                        # record is (w, x, y, z) and this is the whole decode.
+                        #
+                        # It used to swap y and z for every bone but bone 0. That
+                        # swap was standing in for the joint-frame conjugation
+                        # this reader cannot do -- most bones carry an axis of
+                        # (90, 0, 0), where `C * R * C^-1` also moves the vector
+                        # part between y and z. Bone 0 is the root, the one bone
+                        # whose axis is zero and which therefore needed no such
+                        # stand-in, which is why it alone was exempt. The
+                        # conjugation now happens where it belongs, in
+                        # `ArcBoneRecord.local_rotation`, so the swap is gone.
                         qx = ry
-                        qy = rw
-                        qz = rz
+                        qy = rz
+                        qz = rw
                         qw = rx
-                        if y == 0:
-                            qy = rz
-                            qz = rw
                         frames_pos[y].append([px, py, pz])
                         frames_rot[y].append([qx, qy, qz, qw])
                         frames_scl[y].append([sx, sy, sz])

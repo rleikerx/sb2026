@@ -41,9 +41,31 @@ def _mat_apply(m, v):
     )
 
 
+def _mat_transpose(m):
+    """A rotation matrix's inverse."""
+    return (m[0], m[3], m[6], m[1], m[4], m[7], m[2], m[5], m[8])
+
+
+def _euler_to_mat(v):
+    """
+    Radian (x, y, z) triple -> row-major 3x3, composed Z then Y then X.
+
+    This is `math::Quaternion::MakeTripleRotate`, which `Math.dll` exports and
+    which `FromEuler` tail-calls -- the client has exactly one Euler path and
+    this is it. See docs/CLIENT_BINARY_FINDINGS.md section 3.
+    """
+    sx, cx = math.sin(v[0]), math.cos(v[0])
+    sy, cy = math.sin(v[1]), math.cos(v[1])
+    sz, cz = math.sin(v[2]), math.cos(v[2])
+    rx = (1.0, 0.0, 0.0, 0.0, cx, -sx, 0.0, sx, cx)
+    ry = (cy, 0.0, sy, 0.0, 1.0, 0.0, -sy, 0.0, cy)
+    rz = (cz, -sz, 0.0, sz, cz, 0.0, 0.0, 0.0, 1.0)
+    return _mat_mul(_mat_mul(rz, ry), rx)
+
+
 class ArcBoneRecord(object):
     __slots__ = ('name_hash', 'parent_index', 'flags', 'bind_pose_matrix', 'name',
-                 'direction', 'length', 'axis', 'flip')
+                 'direction', 'length', 'axis', 'flip', '_axis_matrix')
 
     def __init__(self):
         self.name_hash = 0
@@ -56,6 +78,7 @@ class ArcBoneRecord(object):
         self.length = 0.0
         self.axis = (0.0, 0.0, 0.0)
         self.flip = 0           # mirrored limb: reuse the opposite side's mesh
+        self._axis_matrix = None  # lazily built from `axis`; see `joint_frame`
 
     # ────────────────────────── binary ──────────────────────────
 
@@ -90,6 +113,7 @@ class ArcBoneRecord(object):
         self.length = data.get('length', 0.0)
         self.axis = tuple(data.get('axis', (0.0, 0.0, 0.0)))
         self.flip = data.get('flip', 0)
+        self._axis_matrix = None
 
     def save_json(self):
         out = OrderedDict([
@@ -105,6 +129,55 @@ class ArcBoneRecord(object):
         out['axis'] = list(self.axis)
         out['flip'] = self.flip
         return out
+
+    # ────────────────────────── joint frame ──────────────────────────
+
+    def joint_frame(self):
+        """
+        The bone's own coordinate frame, as a row-major 3x3. `axis` is its Euler
+        triple, and this is what ASF calls the bone's axis.
+
+        Cached because a pose evaluates it once per bone per frame.
+        """
+        if self._axis_matrix is None:
+            self._axis_matrix = _euler_to_mat(self.axis)
+        return self._axis_matrix
+
+    def local_rotation(self, quaternion):
+        """
+        A clip's (x, y, z, w) for this bone -> its turn in the *parent's* frame.
+
+        A motion clip states a bone's rotation in that bone's own frame, so it
+        has to be carried back out through `axis` before it can be composed with
+        the parent: `C * R * C^-1`. The client does exactly this. `ArcSkeleton`'s
+        setup pass (`sb.exe` 0x5d78c0, recursing through 0x5d7ba0) reads the raw
+        axis at `bone+0x30`, calls `Quaternion::MakeTripleRotate` on it, stores
+        the result at `bone+0x90` and its `Quaternion::Inverse` at `bone+0xa0`,
+        then hands each child *its parent's* inverse to keep at `bone+0xb0` --
+        which is the ASF chain `A_i = A_parent * C_parent^-1 * C_i * R_i` with
+        the constant factors precomputed. Composing world-space turns instead,
+        as `pose` does, the same chain reads `G_i = G_parent * C_i R_i C_i^-1`.
+
+        Bones the clip does not name keep their rest frame: `C * I * C^-1` is
+        the identity, so leaving them out and passing identity agree.
+        """
+        rotation = _quat_to_mat(quaternion)
+        if not any(self.axis):
+            return rotation
+        frame = self.joint_frame()
+        return _mat_mul(_mat_mul(frame, rotation), _mat_transpose(frame))
+
+    def clip_rotation(self, matrix):
+        """
+        Inverse of `local_rotation`: a turn in the parent's frame -> this bone's.
+
+        For code that *authors* a rotation geometrically and then feeds it back
+        through `pose` as though a clip had supplied it.
+        """
+        if not any(self.axis):
+            return matrix
+        frame = self.joint_frame()
+        return _mat_mul(_mat_mul(_mat_transpose(frame), matrix), frame)
 
 
 class ArcSkeleton(object):
@@ -314,7 +387,8 @@ class ArcSkeleton(object):
                 start = (0.0, 0.0, 0.0)
 
             local = rotations.get(bone.name.upper()) if bone.name else None
-            rots[i] = _mat_mul(parent_rot, _quat_to_mat(local)) if local else parent_rot
+            rots[i] = (_mat_mul(parent_rot, bone.local_rotation(local))
+                       if local else parent_rot)
 
             dx, dy, dz = bone.direction
             sx, sy, sz = _mat_apply(
@@ -386,7 +460,7 @@ class ArcSkeleton(object):
                           dz * parent_bone.length)
 
             local = rotations.get(bone.name.upper())
-            r = _quat_to_mat(local) if local else IDENTITY_3X3
+            r = bone.local_rotation(local) if local else IDENTITY_3X3
             out[bone.name.upper()] = (
                 parent,
                 [r[0], r[1], r[2], offset[0],

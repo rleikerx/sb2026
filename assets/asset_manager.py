@@ -749,12 +749,18 @@ class AssetManager:
                 # through anyway, so anything hanging below it still resolves
                 # against what it is really attached to.
                 local = out.get(names[i]) if names[i] else None
-                accumulated[i] = (_mat_mul(parent_rot, _quat_to_mat(local))
+                accumulated[i] = (_mat_mul(parent_rot, bone.local_rotation(local))
                                   if local else parent_rot)
                 continue
 
             world = _quat_to_mat(_quat_from_to(direction, target))
-            out[names[i]] = _mat_to_quat(_mat_mul(_transpose(parent_rot), world))
+            # Back through the bone's own frame before it is stored: `pose` reads
+            # this slot as a clip would state it, and a clip states rotations in
+            # the joint frame (`ArcBoneRecord.local_rotation`). Authoring the
+            # parent-relative turn directly would be conjugated a second time on
+            # the way back in and the wing would miss its target.
+            out[names[i]] = _mat_to_quat(
+                bone.clip_rotation(_mat_mul(_transpose(parent_rot), world)))
             accumulated[i] = world
             folded += 1
 

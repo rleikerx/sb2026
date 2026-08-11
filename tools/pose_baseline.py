@@ -4,11 +4,16 @@ Freeze every playable race's pose as numbers, so a change to the pose math is me
 
 Why this exists
 ---------------
-A pose regression is invisible at thumbnail size. Applying the ASF `axis` frame as
+A pose change is invisible at thumbnail size. Applying the ASF `axis` frame as
 `C * M * C^-1` moves rig 1 by 0.169 stature units -- seventeen percent of body height,
-enough to swing a human's arms from hanging to splayed -- and it was reported here as
+enough to swing a human's arms from hanging to splayed -- and it was reported as
 "unchanged" from a contact sheet, twice, because small pictures of a standing figure
 all look like a standing figure. See docs/CLIENT_BINARY_FINDINGS.md section 4.
+
+That frame is now the right answer rather than a candidate, so the movement it caused is
+in this baseline, not a regression against it. The lesson survives the verdict: this tool
+reports *movement*, and movement is neither good nor bad on its own. `pose_invariants.py`
+is what says whether a move was an improvement.
 
 So: record joint positions, not impressions. Every joint of every playable race at its
 idle clip, normalised by that rig's own stature so the numbers compare across a Centaur

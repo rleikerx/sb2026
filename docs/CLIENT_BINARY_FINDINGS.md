@@ -97,25 +97,67 @@ Also present and worth knowing about: `Quaternion::FromAxisAndAngle`,
 called directly via `ctypes` from this repo — it has to be read, or hosted in a
 32-bit process.
 
-## 4) What this says about `ArcSkeleton.pose()`
+## 4) The joint frame: `bone.axis` is used, and here is the code that uses it
 
-`pose()` composes `parent * clip_quat` and never uses `bone.axis`. 39 of skeleton 18's
-55 bones carry a non-zero axis, so under a literal reading of ASF that looks wrong.
+**Resolved.** `pose()` used to compose `parent * clip_quat` and never touch `bone.axis`.
+That was the defect behind both the universal backward lean and the Aracoix wing fold.
+The client reads the axis, and the function that does it can be pointed at.
 
-**The evidence says it is nevertheless correct**, i.e. the caches are pre-baked and
-`axis` survives as source metadata:
+`sb.exe 0x5d78c0` walks the skeleton once at load and, for every bone:
 
-- Applying the axis as `C * M * C^-1` moves every rig by 0.08–0.44 stature units and
-  visibly **breaks** the humanoids — arms splay outward instead of hanging. The
-  current math renders them correctly.
-- No objective invariant separates the two. Foot skate (a planted foot should not
-  slide while the root advances) scores 0.0130–0.0138 across every candidate, because
-  every leg bone carries the benign 90-degree X axis and the leg chain is near-invariant
-  under the conjugation.
+```asm
+005d793f  lea   edx, [esi + 0x30]          ; bone->axis, raw radians from the parser
+005d7977  call  dword ptr [0x1ab0764]      ; Quaternion::MakeTripleRotate(axis)  -> C
+005d7982  mov   dword ptr [esi + 0x90], edx ;   stored at bone+0x90
+005d79ca  call  dword ptr [0x1ab077c]      ; Quaternion::Inverse                 -> C^-1
+005d79ec  mov   dword ptr [esi + 0xa0], ecx ;   stored at bone+0xa0
+005d7a28  call  0x42690e                   ; recurse per child, passing &C^-1
+```
 
-Do not "fix" this without a test that can tell the two apart. The one that would:
-a frame-accurate comparison against the client for a rig whose axis is *not* a right-angle
-multiple. Skeleton 18 has 6 such bones; the wing roots carry +/-167.3 degrees on Z.
+`0x42690e` is an incremental-link thunk to `0x5d7ba0`, the recursive body. Its first act
+is to store the quaternion it was handed -- *the parent's* `C^-1` -- at the child's
+`bone+0xb0`, then compute that child's own `C` and `C^-1` and recurse. The root is seeded
+with the identity at `0x5d7942` (`0x3f800000` = 1.0f into `bone+0xb0`, scalar-first).
+
+So the runtime bone carries, per bone:
+
+| offset | contents |
+|---|---|
+| `0x20` | `direction`, from the `DIRECTION` handler at `0x5d6470` |
+| `0x2c` | `length`, from the `LENGTH` handler at `0x5d64b0` |
+| `0x30` | `axis`, raw radians |
+| `0x90` | `C` = `MakeTripleRotate(axis)` |
+| `0xa0` | `C^-1` |
+| `0xb0` | the **parent's** `C^-1` |
+
+Caching `C_parent^-1` on the child is the giveaway. It is exactly ASF's
+`rot_parent_current`, and it says the chain the client evaluates is
+
+```
+A_i = A_parent * C_parent^-1 * C_i * R_i
+```
+
+with the two constant factors precomputed at load. Composing world-space turns instead,
+which is what `ArcSkeleton.pose` does, the same chain collapses to the conjugation
+
+```
+G_i = G_parent * (C_i * R_i * C_i^-1)          tip_i = start_i + G_i * direction_i * length_i
+```
+
+and that is `ArcBoneRecord.local_rotation`. A bone the clip does not name is unaffected:
+`C * I * C^-1` is the identity.
+
+**`direction` stays authoritative for geometry.** The alternative -- offsetting each bone
+along its own local +Z, `A_i * (0, 0, length)` -- is identical for every bone satisfying
+`C * (0,0,1) == direction`, and that invariant holds for every animated bone of every rig
+checked *except* `WING02..05` on rigs 18/115/116 and `MANEJOINT` on rig 54. On those nine
+it wrecks the rest pose, so it is wrong. Their `axis` is a copy-paste `(90, 0, 0)` that
+does not describe their direction; the client conjugates by it regardless, and so do we.
+
+**Why the earlier search read this family as a near-miss.** It was scored on
+`pose_invariants.py`'s aggregate, which averages in `arm` -- a weak invariant -- over rigs
+allowed to be genuinely hunched. The aggregate moves only 15.84 -> 12.17. The anchored
+number moves 17 degrees.
 
 ## 5) Inside sb.exe: the ASF parser
 
@@ -148,21 +190,52 @@ handler body — matched, then dropped.
 `0x419042` / `0x40c09a` to keep it. The per-bone `AXIS` handler has no order handling at
 all, so every bone shares the root's order.
 
-What this does **not** answer: what reads `bone+0x30` during pose evaluation. That is the
-question the wing fold turns on, and it is not in the ASF parser. Note also that the ASF
-and AMC text loaders are likely dev-only paths -- the shipped client reads
-`Skeleton.cache` and `Motion.cache`, so the runtime composition lives in the cache-load
-and pose-evaluation code, not here. `<ArcMotion::LoadAMC>` is referenced from `0x5ba087`
+What reads `bone+0x30` is **section 4**: `0x5d78c0` and `0x5d7ba0`, which turn it into the
+`C` / `C^-1` / parent-`C^-1` triple the pose chain composes. Those live outside the ASF
+text parser, which is consistent with the text loaders being dev-only paths -- the shipped
+client reads `Skeleton.cache` and `Motion.cache` -- but the bone struct they fill is the
+same one, so the offsets carry across. `<ArcMotion::LoadAMC>` is referenced from `0x5ba087`
 and `0x5baca1` if that path is wanted.
 
 Tooling: `tools/pe_reader.py` (section map, VA<->offset, xref search) and
 `tools/disasm_sb.py` (disassemble at a VA, annotating `.data` string operands).
 
-## 6) Open: the Aracoix wing fold
+## 6) Resolved: the back lean and the Aracoix wing fold
 
-Unresolved. The client's idle folds the Aracoix wings down the back to ankle height;
-our render of the same authored clip (`18000010`, slot 10) holds them out horizontally.
-Ruled out with evidence, so nobody repeats them:
+Both were the same defect -- `pose()` ignoring the joint frame (section 4) -- and both
+closed when it was applied. Two changes, which had to land together:
+
+1. `ArcBoneRecord.local_rotation` conjugates every clip quaternion by its bone's frame,
+   `C * R * C^-1`.
+2. `ArcMotion` now reads the clip quaternion straight, `(w, x, y, z) -> (x, y, z, w)`,
+   with no component swap and no per-bone special case.
+
+**Why (2) had to come with (1).** The old reader swapped y and z for every bone *except
+bone 0*, and that exemption was the tell. Most bones carry an axis of `(90, 0, 0)`, where
+the conjugation also moves the vector part between y and z -- so the swap was a hand-fitted
+stand-in for the missing conjugation. Bone 0 is the root, the one bone whose axis is zero
+and which therefore needed no stand-in, which is exactly why it alone was exempt. Remove
+the swap without adding the conjugation and the pose is 166 degrees out, which is what the
+earlier "no remap at all" result was measuring.
+
+Results, rig 18 (`18000010`, slot 10), against the client video:
+
+| measure | before | after |
+|---|---:|---:|
+| spine off vertical | +13.3 deg | -3.6 deg |
+| head off vertical | +13.2 deg | -3.7 deg |
+| lowest wing-tip height | 87% of stature above the ankle | 28% |
+
+The remaining -3.6 degrees is a slight *forward* lean and is not the original defect
+inverted; whether it is authored posture or a further error is not settled.
+
+**An independent check, not a fit.** The same math has to fold the Aracoix wings and leave
+the Nephilim's spread -- the doc's own note from client video. It does: on rig 18 the wing
+tips drop to 28% of stature with a lateral span of 0.61, while rigs 115/116 keep a span of
+3.40. Nothing in the change is aimed at either rig. `images/pose_review/` and a side render
+of `2002` at frame 0 show it directly.
+
+Still true, and still worth not repeating:
 
 | hypothesis | verdict |
 |---|---|
@@ -171,38 +244,54 @@ Ruled out with evidence, so nobody repeats them:
 | Euler order | XYZ/YXZ/XZY identical here; ZYX clearly wrong; client uses ZYX-composed = `Rz@Ry@Rx` |
 | `direction` also in the joint frame | collapses the model entirely |
 | handedness (negated Z euler) | helps Nephilim, hurts Aracoix |
-| axis composition `C*M*C^-1` | see section 4; 40 variants scored, best 12.84 deg vs 16.11 current |
-| quaternion component order | 4 orders scored, best 15.31 deg; no remap at all gives 166 deg, so a remap is definitely required |
+| per-frame translation or scale | the clip's `pos` is identically zero and `scale` exactly 1 |
+| quaternion component order alone, no joint frame | 4 orders scored, best 15.31; the two must change together |
 
-A systematic defect found late and still unexplained: **every animation leans back**.
-Client video of the Aracoix idle shows the spine vertical; our render of the same clip
-and frame leans **13.5 degrees back**, and the mean across rigs is 8-14 degrees while the
-rest pose is 0.0. It is not the root bone (root pitch is 0.3 to -3.3 on humanoid rigs);
-the lean is carried by LOWERBACK (-5.4 mean pitch) and UPPERBACK (-11.35). `tools/pose_invariants.py`
-scores it.
+An exhaustive 192-variant sweep (24 component permutations x 8 sign patterns, joint frame
+on) does contain variants that score the two anchored angles better than scalar-first.
+They are overfitting -- three degrees of freedom against two numbers -- and the best of
+them have aggregates of 53. Scalar-first is what `Math.dll` says the bytes are (section 3),
+and it is the one that needs no per-bone exception.
 
-One concrete smaller finding on the way: `ArcMotion`'s quaternion remap exempts bone 0
-(`if y == 0`) from the y/z swap it applies to every other bone. Dropping that exemption
-scores better -- 15.31 against 16.11 -- and a per-bone special case is the signature of
-trial-and-error rather than derivation. It is not the defect, but it looks wrong.
+**Consequence for anything walking the hierarchy itself.** `tools/export_motions.py` ran
+its own forward-kinematics loop and needed the same conjugation; it now carries `axis` in
+`skeletons.json` and applies it. `AssetManager._fold_wings` authors rotations that are fed
+back through `pose()`, so it authors through `ArcBoneRecord.clip_rotation` to land in the
+frame `pose` will read them in. Any new consumer has the same obligation.
 
-Also established from client video: **the Nephilim idle spreads its wings and never
-folds them.** `_fold_wings` is aimed wrong for rigs 115/116.
+**Left open.** `_fold_wings` still overrides rigs 18/20/70/117 with a synthetic fold, and
+for rig 18 the clip now supplies a real one. It is no longer obviously needed there. That
+only affects the `stand_pose` / `wing_fold_pose` export path, not the clip renders.
 
 ## 7) Reproducing this
 
 ```bash
-# exports, with RVAs
-python tools/... # or inline: parse the PE export directory of Math.dll
-
-# disassembly (capstone is in viewer_env)
-./viewer_env/Scripts/python.exe scratch/disasm.py \
-    "?MakeTripleRotate@Quaternion@math@@SA?AV12@ABVVector3@2@@Z"
-
 # strings
 python -c "import re;from pathlib import Path;\
 b=Path(r'C:/code/lakebane/sb.exe').read_bytes();\
 print('\n'.join(sorted(set(x.decode('latin-1') for x in re.findall(rb'[ -~]{6,}',b) if b'ArcanePrime' in x))))"
 ```
 
-`viewer_env` has `capstone` 5.0.7; the system Python does not.
+Disassembly -- capstone is in `viewer_env`, the system Python does not have it. The
+joint-frame setup of section 4:
+
+```bash
+./viewer_env/Scripts/python.exe tools/disasm_sb.py 0x5d78c0 120   # root, seeds identity
+./viewer_env/Scripts/python.exe tools/disasm_sb.py 0x5d7ba0 100   # recursive body
+```
+
+To go from a Math.dll symbol to its call sites: `tools/pe_reader.py` parses the import
+directory, and searching `.text` for `ff 15 <little-endian IAT address>` finds the callers.
+The two cited above are `0x1ab0764` `MakeTripleRotate` and `0x1ab077c` `Quaternion::Inverse`.
+
+Scoring a pose change:
+
+```bash
+./viewer_env/Scripts/python.exe tools/pose_invariants.py       # correctness, anchored on rig 18
+./viewer_env/Scripts/python.exe tools/pose_baseline.py         # movement against the frozen pose
+./viewer_env/Scripts/python.exe tools/pose_sheet.py --probe --tag <name>    # and look at it
+./viewer_env/Scripts/python.exe tools/pose_render.py --ids 2002 --pose 18000010:0 --views side
+```
+
+That last one is the Aracoix idle at the frame the client video was compared against, and
+is the single picture showing both the lean and the wing fold.

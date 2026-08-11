@@ -37,7 +37,7 @@ from typing import Any
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from arcane.ArcMotion import ArcMotion
-from arcane.ArcSkeleton import ArcSkeleton
+from arcane.ArcSkeleton import ArcSkeleton, _euler_to_mat, _mat_mul, _mat_transpose
 from arcane.util.ArcFileCache import load_cache_file
 from arcane.util.ResStream import ResStream
 
@@ -140,6 +140,8 @@ def bone_table(skel: Any) -> list[dict[str, Any]]:
                 "parent": b.parent_index,
                 "offset": [round(v, 6) for v in offset],
                 "length": round(b.length, 6),
+                # The joint's own frame, which the clip's quaternions are stated in.
+                "axis": [round(float(v), 6) for v in b.axis],
             }
         )
     return table
@@ -157,7 +159,17 @@ def pose_frame(bones: list[dict[str, Any]], tracks: dict[str, Any], frame: int) 
             offset = bone["offset"]
         else:
             f = min(frame, len(track["rot"]) - 1)
+            # Out of the joint frame before composing with the parent, the same
+            # `C * R * C^-1` that `ArcBoneRecord.local_rotation` applies. Walking
+            # the hierarchy here rather than calling `ArcSkeleton.pose` means this
+            # step has to be repeated, and leaving it out is what tipped every
+            # exported clip backwards.
             rotation = quat_to_matrix(track["rot"][f])
+            axis = bone.get("axis") or (0.0, 0.0, 0.0)
+            if any(axis):
+                frame_matrix = _euler_to_mat(axis)
+                rotation = list(_mat_mul(_mat_mul(frame_matrix, tuple(rotation)),
+                                         _mat_transpose(frame_matrix)))
             # Only the root translates; every other bone sits at its rest offset and turns.
             offset = track["pos"][f] if bone["parent"] < 0 else bone["offset"]
         node = compose(parent, rotation, offset)

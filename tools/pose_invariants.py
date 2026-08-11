@@ -10,8 +10,10 @@ correct here twice. This scores *correctness* instead, against angles that have 
 right answer.
 
 The anchor is measured, not assumed. Client video of the Aracoix idle (rig 18) shows the
-spine vertical; our render of the same clip, same frame, leans **13.5 degrees back**. That
-is a real defect, and it is the case every candidate has to fix.
+spine vertical; our render of the same clip, same frame, used to lean **13.5 degrees
+back**. That was the defect this was built to catch, and applying the ASF joint frame
+(`ArcBoneRecord.local_rotation`) closed it: rig 18's spine reads -3.6 now, and the wings
+fold down the back instead of standing out horizontally.
 
     spine   LOWERBACK -> NECKJOINT, angle off vertical      target 0
     head    NECK -> HEAD, angle off vertical                target 0
@@ -25,12 +27,20 @@ is a search signal, not a specification. **Rig 18 is the only number verified ag
 client** -- treat the rest as corroborating, and check a candidate visually before
 believing it.
 
-Searched and rejected so far (see docs/CLIENT_BINARY_FINDINGS.md):
+Read the aggregate with even more care after a real fix
+------------------------------------------------------
+The joint-frame fix moved rig 18's spine 17 degrees, from +13.3 to -3.6, and moved the
+aggregate only 15.84 -> 12.17. An earlier search over 40 axis-composition variants scored
+this same family at "12.84 vs 16.11 current" and read that as a near-miss, because the
+aggregate averages in `arm`, a weak invariant, over rigs that are allowed to be hunched.
+The anchored number is the one that moved. Do not rank candidates on the aggregate.
 
-    40 axis-composition variants   best 12.84 vs 16.11 current
-    4 quaternion component orders  best 15.31 (dropping ArcMotion's ROOT exemption)
+Searched and rejected (see docs/CLIENT_BINARY_FINDINGS.md):
 
-Neither space contains the fix.
+    4 quaternion component orders, with no joint frame   best 15.31
+
+That space does not contain the fix, and could not: the component swap it searches over
+was a stand-in for the joint frame, so the two have to change together.
 
 Usage:
     python tools/pose_invariants.py
@@ -54,8 +64,9 @@ if str(REPO_ROOT) not in sys.path:
 # it is the one anchored to client video.
 DEFAULT_RIGS = (18, 1, 6, 54, 103, 120)
 IDLE_SLOTS = ("10", "11", "12", "1")
-# The measured client-vs-ours gap on rig 18, for reference in the report.
-ARACOIX_OBSERVED_LEAN = 13.5
+# The client-vs-ours gap on rig 18 as first measured, before the joint frame was
+# applied. Kept as the yardstick the residual is reported against.
+ARACOIX_ORIGINAL_LEAN = 13.5
 
 
 def angle_off_vertical(a, b) -> Optional[float]:
@@ -155,8 +166,10 @@ def main() -> int:
         aracoix = next((r for r in rows if r["clip"] and r.get("spine") is not None
                         and r["clip"] // 1000000 == 18), None)
         if aracoix:
-            print(f"rig 18 spine {aracoix['spine']:+.1f} deg; client video shows this vertical, "
-                  f"so the defect is about {ARACOIX_OBSERVED_LEAN:.1f} deg")
+            residual = abs(aracoix["spine"])
+            print(f"rig 18 spine {aracoix['spine']:+.1f} deg against a client video that shows it "
+                  f"vertical; the lean this was built to catch was "
+                  f"{ARACOIX_ORIGINAL_LEAN:+.1f} deg, so {residual:.1f} deg is left")
     return 0
 
 
