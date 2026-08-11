@@ -133,44 +133,50 @@ def named_animids(path: Path, key: str = "ANIMID") -> Dict[int, str]:
     return out
 
 
-def keyed_animids(path: Path, key: str) -> Dict[int, List[str]]:
+def block_animids(path: Path, begin: str, key: str, pairs: bool = False) -> Dict[int, List[str]]:
     """
-    ANIMID -> the named entries that select it, for a config where many names share ids.
+    ANIMID -> the entries that select it, for the BEGIN/END block configs.
 
-    Powers.cfg uses LOOPANIMID and reuses thirteen ids across 666 powers, so the useful
-    direction is id -> names rather than the other way round.
+    These files do not use `NAME=`. A block opens with `POWERBEGIN`, and the entry's
+    own identity is on the first line inside it:
+
+        POWERBEGIN
+             ACM-001 "Litany of Will" SPELL 4188 ...
+             LOOPANIMID= 213
+        POWEREND
+
+    so the label is the quoted display name where there is one and the leading code
+    otherwise (PowerActions.cfg carries no display name: `ASS-017A Transform ...`).
+    Reading these with a `NAME=` regex yields an id map with every label blank.
+
+    `pairs` says the value is [animid, weight] rather than a flat list. ATTACKANIMS
+    reads `75 50 76 50` -- two animations at 50% each, not four animations. Taken
+    flat it invents an ANIMID 50 that no power ever plays.
     """
     if not path.exists():
         return {}
     out: Dict[int, set] = defaultdict(set)
-    current: Optional[str] = None
-    for line in path.read_text(encoding="latin-1", errors="ignore").splitlines():
-        name = re.match(r'\s*NAME=\s*"([^"]*)"', line)
-        if name:
-            current = name.group(1)
-            continue
-        found = re.match(r"\s*%s=\s*(\d+)" % key, line)
-        if found and int(found.group(1)):
-            out[int(found.group(1))].add(current or "")
-    return {k: sorted(v) for k, v in sorted(out.items())}
+    label: Optional[str] = None
+    expecting = False
 
-
-def attack_animids(path: Path) -> Dict[int, List[str]]:
-    """ATTACKANIMS is a whitespace-separated list of ANIMIDs on a power action."""
-    if not path.exists():
-        return {}
-    out: Dict[int, set] = defaultdict(set)
-    current: Optional[str] = None
     for line in path.read_text(encoding="latin-1", errors="ignore").splitlines():
-        name = re.match(r'\s*NAME=\s*"([^"]*)"', line)
-        if name:
-            current = name.group(1)
+        if line.strip().startswith(begin):
+            label, expecting = None, True
             continue
-        found = re.match(r"\s*ATTACKANIMS=\s*([0-9 ]+)", line)
-        if found:
-            for value in found.group(1).split():
-                if int(value):
-                    out[int(value)].add(current or "")
+        if expecting and line.strip():
+            quoted = re.search(r'"([^"]*)"', line)
+            code = re.match(r"\s*(\S+)", line)
+            label = quoted.group(1) if quoted else (code.group(1) if code else None)
+            expecting = False
+            # fall through: a block whose first line also carries the key is possible
+        found = re.match(r"\s*%s=\s*([0-9 ]+)" % key, line)
+        if not found:
+            continue
+        values = [int(v) for v in found.group(1).split()]
+        animids = values[0::2] if pairs else values
+        for animid in animids:
+            if animid:
+                out[animid].add(label or "")
     return {k: sorted(v) for k, v in sorted(out.items())}
 
 
@@ -246,8 +252,9 @@ def main() -> int:
 
     # -- actions.json --------------------------------------------------
     emotes = named_animids(config / "Emotes.cfg")
-    powers = keyed_animids(config / "Powers.cfg", "LOOPANIMID")
-    actions = attack_animids(config / "PowerActions.cfg")
+    powers = block_animids(config / "Powers.cfg", "POWERBEGIN", "LOOPANIMID")
+    actions = block_animids(config / "PowerActions.cfg", "POWERACTIONBEGIN",
+                            "ATTACKANIMS", pairs=True)
 
     # -- items.json + models.json --------------------------------------
     cobjects = next(iter(sorted(dump.rglob("CObjects.cache"))), None)

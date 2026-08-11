@@ -47,7 +47,7 @@ bow = rig["actions"]["emote"]["137"]
 
 # 5. load the track and drive the GLB's nodes BY NAME
 track = json.loads((root/bow["track"]).read_text())
-#   {"fps": 15, "frames": 61, "bones": {"ROOT": {"rotFrames": [...], ...}, ...}}
+#   {"fps": 15, "frames": 47, "bones": {"ROOT": {"rotFrames": [...], ...}, ...}}
 ```
 
 Applying a frame:
@@ -112,6 +112,132 @@ a **weighted choice**, it does not cycle them in order.
 `catalog` + `skeleton_actions` + `items` is all most consumers need. `resolve` and
 `actions` are the raw inputs those two are built from.
 
+## Reference — action classes
+
+| class | ids | range | chosen by | source |
+|---|---:|---|---|---|
+| `emote` | 59 | 130–199 | player / AI | `Emotes.cfg` `ANIMID` |
+| `weaponSwing` | 45 | 64–117 | equipped weapon | `weapon_attack_anim_right`/`_left` |
+| `powerLoop` | 13 | 166–311 | power being cast | `Powers.cfg` `LOOPANIMID` |
+| `combatIdle` | 12 | 12–25 | equipped weapon | `weapon_combat_idle_anim` |
+| `parry` | 7 | 294–301 | equipped weapon | `item_parry_anim_id` |
+| `powerActionAttack` | 2 | 75–76 | power action | `PowerActions.cfg` `ATTACKANIMS` |
+
+**parry, by item count** — 294:35, 295:38, 296:29, 297:30, **298:3,781**, 299:80, 301:18
+
+**combatIdle, by weapon count** — 12:124, 13:6, 14:4, 15:18, 16:43, 17:38, 19:29,
+20:30, 21:76, 22:25, 23:15, 25:93
+
+## Reference — emote ids
+
+```
+130 apologize  131 applaud   132 beckon    133 beg        134 blow
+135 boast      136 bounce    137 bow       138 cackle     139 cheer
+140 flip       141 chuckle   142 clap      143 cough      144 cower
+145 cringe     146 chop      147 cries     148 dance      149 say
+150 duck       151 faint     152 flex      153 flinch     154 perform
+155 flip       156 fume      157 giggle    158 groan      159 grovel
+160 howl       161 kneel     162 laugh     163 show       164 moo
+165 moon       166 nod       167 peer      168 point      169 pray
+170 preen      171 propose   172 puke      173 punch      174 rofl
+175 salute     176 scream    177 shake     178 shiver     179 shrug
+180 stagger    181 stretch   182 strut     183 give       184 wave
+185 worship    197 shakefist 198 scary     199 letblood
+```
+
+`198 scary` and `199 letblood` are named but have no clip on any rig. 140 and 155 are
+both `flip`; 154 `perform` and 157 `giggle` share one clip. Ids 166–168 (`nod`, `peer`,
+`point`) double as power loop poses.
+
+## Reference — power ids
+
+13 loop poses cover all 666 powers, heavily skewed:
+
+| ANIMID | powers | examples |
+|---:|---:|---|
+| 213 | 334 | Ancient Riddle, Annoint Blade, Antidote |
+| 209 | 117 | Aid to the Injured, Awaken the Fallen |
+| 205 | 79 | Amazon's Endurance, Beast Lord's Boon |
+| 217 | 53 | Aspect Revelation, Balefume, Battlemind |
+| 167 | 15 | Camouflage, Detect Hidden |
+| 201 | 8 | Acid Spit, Banshee Scream, Energy Drain |
+| 168 | 5 | Capture, Capture Prey |
+| 303 | 4 | Hamstring, Snare |
+| 311 | 2 | Fury of the Northmen, Whirlwind Attack |
+| 166 / 208 / 302 / 308 | 1 each | Lore of the Forge / Vok-Maalra / Knavery / Blade Dance |
+
+`powerActionAttack` is separate: ANIMIDs **75** and **76**, each at weight 50, on 30
+transform-type power actions (`ASS-017A`, `BKM-004A`, `EPI-017A`…).
+
+## Reference — rig coverage
+
+The ten rigs below carry 1,251 of the 2,380 models; `coverage.json` has all 85.
+A dash means the rig has no animation in that class at all.
+
+| rig | models | emote | parry | idle | swing | power |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 315 | 57 | 7 | 12 | 45 | 13 |
+| 9 | 178 | — | — | 12 | 45 | 1 |
+| 8 | 166 | 4 | — | 12 | 45 | 1 |
+| 50 | 143 | 1 | — | 12 | 45 | 6 |
+| 6 | 100 | 57 | 7 | 12 | 45 | 13 |
+| 12 | 80 | 1 | — | 12 | 6 | — |
+| 54 | 74 | 57 | 7 | 12 | 45 | 13 |
+| 98 | 73 | 1 | — | 12 | 45 | — |
+| 10 | 64 | 1 | — | 12 | 6 | 1 |
+| 13 | 58 | 1 | — | 12 | 45 | — |
+
+Rigs 1, 6 and 54 are the playable-race bodies. **645 of 2,380 models can parry; 726
+have a real emote set.**
+
+## Reference — schemas
+
+```jsonc
+// catalog[assetId]
+{ "name": "Aracoix Outcast", "race": "NPC", "sex": "MALE",
+  "skeletonId": 18, "glb": "models_rigged/Creature/12050_Aracoix_Outcast.glb" }
+
+// skeletonActions[skeletonId]
+{ "models": 44, "slots": 455,
+  "itemDriven": ["parry", "combatIdle", "weaponSwing"],
+  "actions": { "emote": { "137": {
+      "clip": 1000137, "track": "motions/tracks/clips/1000137.json",
+      "name": "bow",        // emotes only
+      "usedBy": null } } } } // powers: list of power names
+
+// items[itemId]
+{ "name": "Battle Axe", "baseName": "Battle Axe", "type": "WEAPON",
+  "equipSlots": 4, "skillUsed": 2691863556,
+  "parryAnimId": 298,
+  "renderObject": 25030, "renderObjectFemale": null,
+  // weapons only:
+  "combatIdleAnimId": 12,
+  "attackAnimRight": [[64,33],[66,33],[67,34]],   // [animid, weight%]
+  "attackAnimLeft":  [[65,100]],
+  "weaponSpeed": 25.0, "maxRange": 5.0 }
+
+// motions/tracks/clips/{clip}.json
+{ "name": "…", "frames": 47, "fps": 15,
+  "secondsPerFrame": 0.0667, "seconds": 3.13,
+  "bones": {
+    "ROOT":   { "rotFrames": [x,y,z,w, …], "posFrames": [x,y,z, …], "scale": 1.0 },
+    "LFEMUR": { "rot": [x,y,z,w] } } }        // constant — no rotFrames key
+
+// resolve.skeletons[skeletonId]
+{ "slots": 455,         // total, holes included
+  "filled": 247,        // non-zero slots
+  "distinctClips": 234, // filled minus aliases
+  "animid": { "137": 1000137, "298": 1000298 } }
+
+// models[assetId]
+{ "name": "…", "race": "…", "sex": "MALE", "skeletonId": 18, "renderable": true }
+
+// coverage[skeletonId][class]
+{ "of": 59, "resolved": 57 }
+```
+
+A clip in more than one slot is the rig saying those actions look the same.
+
 ## Traps
 
 **A track can name a bone the rig does not have.** Clips are shared across rigs, so
@@ -136,13 +262,17 @@ requires this, but engines vary. Nodes carry `flip: true` in `extras` to mark th
 **There is no dodge animation.** Dodge is a skill and a combat modifier; it resolves
 to a number, never to a clip.
 
+**Weights, not ids.** In `attackAnimRight`, `attackAnimLeft` and power `ATTACKANIMS`,
+values alternate `[animid, weight]`. `ATTACKANIMS= 75 50 76 50` is two animations at
+50% each, not four animations — reading it flat invents an ANIMID 50 that nothing plays.
+
 ## What is verified
 
 Checked by `package_animations.py` on every run, recorded in `index.json`:
 
 - 2,380 GLBs ↔ 2,380 catalog rows, exact 1:1, nothing unmatched either way
 - 85 rigs, all with a slot table and an action map
-- 4,420 resolved action clips, **every one with a track file on disk**
+- 4,335 resolved action clips, **every one with a track file on disk**
 - bone-name binding spot-checked on all 85 rigs: every clip-driven bone a rig
   actually owns is a node in its GLB — 0 failures across all 2,380 models
 - 1,423 reachable clip tokens, 0 missing from the source cache
