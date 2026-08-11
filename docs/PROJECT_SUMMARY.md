@@ -11,6 +11,13 @@ A professional desktop application for viewing, animating, and exporting game as
 - **Phase 3**: Skeletal Animation (Bones, Skinning, Timeline) ✅
 - **Phase 4**: Export Functionality (OBJ, GLTF) ✅
 
+> **Read before starting a pass over the skeleton or animation code.** Phase 3 shipped with
+> the ASF joint frame unapplied, so every animated clip leaned ~13° backwards and the
+> Aracoix wings never folded. Fixed 11 Aug 2026. It also moved `unitsPerMetre` from 2.7411
+> to 2.5994, because that figure is derived from a posed model. The evidence, the client
+> disassembly that settles it, and what is still open are in **`dev_log/081126.md`**;
+> the conventions are in `docs/CLIENT_BINARY_FINDINGS.md` sections 4 and 6.
+
 ## Features
 
 ### Asset Management
@@ -36,7 +43,8 @@ A professional desktop application for viewing, animating, and exporting game as
 - Auto-framing on mesh load
 
 ### Skeletal Animation
-- **43-bone hierarchies** (humanoid skeletons)
+- **103 skeletons, 4,228 bones** — 43 is the male-human rig, not the shape of the cache.
+  Body plans range from a 2-bone banner to a 129-bone face rig, and 27-bone quadrupeds.
 - **GPU vertex skinning** (up to 128 bones)
 - **Frame interpolation** (lerp for position/scale, slerp for quaternions)
 - **Playback controls**: Play, pause, stop, scrub
@@ -231,12 +239,17 @@ for each vertex:
 - Bone hierarchy (parent indices)
 - Bone names
 - Bind pose matrices (4x4)
-- 104 skeletons available
+- **`axis`, the bone's own joint frame** — a clip states its rotation in this frame, so it
+  has to be conjugated out (`C * R * C^-1`) before composing with the parent. Ignoring it
+  leaned every animated rig ~13° backwards until 11 Aug 2026; see `dev_log/081126.md`.
+- 103 skeletons available
 
 ### Motions (ArcMotion)
-- Position, rotation (quaternion), scale per bone per frame
-- Frame rate (typically 30 FPS)
-- 1,504 motions available
+- Rotation (quaternion) per bone per frame, **stated in the bone's joint frame**
+- Position and scale are present and inert: `pos` is identically zero and `scale` exactly 1
+  on every clip measured, so these are rotation-only
+- Frame rate **stated by the clip**, not assumed: 1,483 clips at 15 fps and 20 at 120
+- 1,503 motions available
 
 ### Textures (ArcTexture)
 - JPG format
