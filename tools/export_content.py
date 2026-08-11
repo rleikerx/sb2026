@@ -1,0 +1,243 @@
+#!/usr/bin/env python3
+"""
+Extract mechanical game data from the client cache as JSON.
+
+Character and item numbers live in the COBJECT records the client shipped, so
+they can be read directly rather than scraped from a wiki. Same data, one step
+closer to the source: re-runnable against a different cache and diffable.
+
+What it emits (mechanical data only - no lore or description prose):
+
+    races.json        base + cap attributes, creation cost, health/mana/stamina,
+                      movement speeds, and which classes accept each race
+    classes.json      base classes: attribute adjustments, granted skills,
+                      eligible races
+    disciplines.json  discipline runes and their requirements
+    talents.json      talent runes
+    items.json        equippable items: slot, weight, value, damage, requirements
+    structures.json   buildings: rank progression, health, and the mesh that
+                      renders each rank
+
+Usage:
+    python tools/export_content.py --out export_aegisfall/content
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import struct
+import sys
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from arcane.util import ResStream
+from arcane.enums.arc_rune import RUNE_TYPE_TO_STRING
+from assets.asset_manager import AssetManager, COBJECT_TYPE_PARSERS, COBJECT_HEADER_SIZE
+from assets.asset_catalog import AssetCatalog, AssetKind
+
+STAT_ORDER = ["Strength", "Dexterity", "Constitution", "Intelligence", "Spirit"]
+
+
+def signed32(v: Any) -> Any:
+    """Attribute deltas are stored unsigned; -10 arrives as 4294967286."""
+    if isinstance(v, int) and v >= 0x80000000:
+        return v - 0x100000000
+    return v
+
+
+def clean(text: Optional[str]) -> str:
+    return "".join(ch for ch in (text or "") if ch.isprintable()).strip()
+
+
+def attr_map(entries) -> Dict[str, int]:
+    """[{attr_type, attr_value}] -> {stat: value}, ordered like the stat sheet."""
+    out: Dict[str, int] = {}
+    for e in entries or []:
+        if isinstance(e, dict) and "attr_type" in e:
+            out[str(e["attr_type"])] = signed32(e.get("attr_value", 0))
+    return {k: out[k] for k in STAT_ORDER if k in out} | {
+        k: v for k, v in out.items() if k not in STAT_ORDER
+    }
+
+
+def raw_object(am: AssetManager, asset_id: int):
+    data = am.archives["cobject"].read(asset_id)
+    if data is None or len(data) < COBJECT_HEADER_SIZE:
+        return None, None
+    type_code = struct.unpack_from("<I", data, 4)[0]
+    parser = COBJECT_TYPE_PARSERS.get(type_code)
+    if parser is None:
+        return None, None
+    obj = parser()
+    obj.load_binary(ResStream(data[COBJECT_HEADER_SIZE:]))
+    return type_code, obj
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--dump", default=str(REPO_ROOT / "arcane_dump"))
+    ap.add_argument("--out", default=str(REPO_ROOT / "export_aegisfall" / "content"))
+    args = ap.parse_args()
+
+    am = AssetManager(args.dump)
+    catalog = AssetCatalog(am)
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    races: Dict[str, dict] = {}
+    classes: List[dict] = []
+    disciplines: List[dict] = []
+    talents: List[dict] = []
+
+    for asset_id in catalog.iter_asset_ids(AssetKind.CREATURE):
+        _, obj = raw_object(am, asset_id)
+        if obj is None:
+            continue
+        fields = obj.save_json()
+        rune_type = RUNE_TYPE_TO_STRING.get(getattr(obj, "rune_type", None))
+        name = clean(fields.get("obj_name"))
+
+        common = {
+            "asset_id": asset_id,
+            "name": name,
+            "icon_texture_id": fields.get("obj_icon") or None,
+            "creation_cost": fields.get("rune_creation_cost"),
+            "attributes": attr_map(fields.get("rune_attr_adj")),
+            "attribute_caps": attr_map(fields.get("rune_max_attr_adj")),
+        }
+
+        if rune_type == "RACE":
+            # Races appear once per sex/body variant; keep one entry per race
+            # and record the variants that render it.
+            key = clean(fields.get("rune_sub_type")) or name
+            entry = races.setdefault(key, {
+                **common,
+                "race": key,
+                "health": fields.get("rune_health"),
+                "mana": fields.get("rune_mana"),
+                "stamina": fields.get("rune_stamina"),
+                "speeds": fields.get("rune_speed"),
+                "standard_creation": fields.get("rune_is_standard_character_creation"),
+                # First variant's rig, kept for callers that already read it. It is the
+                # MALE one for every dual-sex race, so it is the wrong rig for half of
+                # them — the per-variant `skeleton_id` below is the one to bind to.
+                "skeleton_id": fields.get("rune_skeleton"),
+                "variants": [],
+                "classes": [],
+            })
+            entry["variants"].append({
+                "asset_id": asset_id,
+                "sex": fields.get("rune_sex"),
+                # Sex changes the skeleton, always: no race that ships both sexes shares
+                # a rig between them (male human is 1, female is 6).
+                "skeleton_id": fields.get("rune_skeleton"),
+                "icon_texture_id": fields.get("obj_icon") or None,
+            })
+        elif rune_type in ("CLASS", "DISCIPLINE", "TALENT"):
+            row = {
+                **common,
+                "rune_type": rune_type,
+                "eligible_races": list((fields.get("item_race_req") or {}).get("races") or []),
+                "required_classes": list((fields.get("item_class_req") or {}).get("classes") or []),
+                "level_req": fields.get("item_level_req"),
+                "pracs_per_level": fields.get("rune_pracs_per_level"),
+                "skill_grants": [
+                    {"skill": s.get("skill_type"), "value": signed32(s.get("skill_value", 0))}
+                    for s in (fields.get("rune_skill_grant") or []) if isinstance(s, dict)
+                ],
+                "skill_adjustments": [
+                    {"skill": s.get("skill_type"),
+                     "adjustments": [[signed32(a) for a in pair] for pair in s.get("skill_adjusts") or []]}
+                    for s in (fields.get("rune_skill_adj") or []) if isinstance(s, dict)
+                ],
+            }
+            {"CLASS": classes, "DISCIPLINE": disciplines, "TALENT": talents}[rune_type].append(row)
+
+    # Cross-link: which classes each race may take.
+    for row in classes:
+        for race_name in row["eligible_races"]:
+            if race_name in races:
+                races[race_name]["classes"].append(row["name"])
+
+    # ---- items ---------------------------------------------------------
+    items: List[dict] = []
+    for asset_id in catalog.iter_asset_ids(AssetKind.ITEM):
+        _, obj = raw_object(am, asset_id)
+        if obj is None:
+            continue
+        f = obj.save_json()
+        items.append({
+            "asset_id": asset_id,
+            "name": clean(f.get("obj_name")),
+            "base_name": clean(f.get("item_base_name")),
+            "icon_texture_id": f.get("obj_icon") or None,
+            "type": f.get("item_type"),
+            "equip_slots": [s for s in (f.get("item_eq_slots_or") or []) if s != "NONE"],
+            "weight": f.get("item_wt"),
+            "value": f.get("item_value"),
+            "damage": [f.get("item_min_damage"), f.get("item_max_damage")],
+            "level_req": f.get("item_level_req"),
+            "rank_req": f.get("item_rank_req"),
+            "skill_used": f.get("item_skill_used"),
+            "eligible_races": list((f.get("item_race_req") or {}).get("races") or []),
+            "eligible_classes": list((f.get("item_class_req") or {}).get("classes") or []),
+            "flags": list(f.get("item_flags") or []),
+        })
+
+    # ---- structures ----------------------------------------------------
+    structures: List[dict] = []
+    for asset_id in catalog.iter_asset_ids(AssetKind.STRUCTURE):
+        _, obj = raw_object(am, asset_id)
+        if obj is None:
+            continue
+        f = obj.save_json()
+        cobj = am.load_cobject(asset_id)
+        ranks = []
+        for rank in f.get("template_rank_info") or []:
+            if not isinstance(rank, dict):
+                continue
+            ranks.append({
+                "rank": signed32(rank.get("rank_rank")),
+                "health": rank.get("rank_health"),
+                "hirelings": signed32(rank.get("rank_hirelings")),
+                "buildings": [b[1] for b in rank.get("rank_building_id") or [] if len(b) >= 2],
+            })
+        structures.append({
+            "asset_id": asset_id,
+            "name": clean(f.get("obj_name")),
+            "icon_texture_id": f.get("obj_icon") or None,
+            "health": f.get("combat_health_full"),
+            "template_id": getattr(cobj, "template_id", None),
+            "render_ids": list(getattr(cobj, "render_ids", []) or []),
+            "ranks": ranks,
+        })
+
+    tables = {
+        "races.json": sorted(races.values(), key=lambda r: r["race"]),
+        "classes.json": sorted(classes, key=lambda r: r["name"]),
+        "disciplines.json": sorted(disciplines, key=lambda r: r["name"]),
+        "talents.json": sorted(talents, key=lambda r: r["name"]),
+        "items.json": items,
+        "structures.json": structures,
+    }
+    for filename, rows in tables.items():
+        with (out_dir / filename).open("w", encoding="utf-8") as fh:
+            json.dump(rows, fh, indent=2)
+        print(f"{filename:20s} rows={len(rows)}")
+
+    print(f"\ncontent|out={out_dir}")
+    sample = tables["races.json"][0] if tables["races.json"] else None
+    if sample:
+        print(f"sample race: {sample['race']} cost={sample['creation_cost']} "
+              f"attrs={sample['attributes']} caps={sample['attribute_caps']}")
+        print(f"  classes={sample['classes']}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
