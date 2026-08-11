@@ -22,9 +22,22 @@ source that names an ANIMID:
     Emotes.cfg          ANIMID          59 named emotes, 130-199
     Powers.cfg          LOOPANIMID      the pose a power holds while channelling
     PowerActions.cfg    ATTACKANIMS     the swing a power action plays
+    Effects.cfg         AnimOverride    what an ACTIVE effect plays instead
     COBJECT items       item_parry_anim_id, weapon_combat_idle_anim,
                         weapon_attack_anim_right/left  -- per weapon
     COBJECT race runes  rune_skeleton per sex
+
+`AnimOverride` was the one this had been missing, and it is the largest of them: 1,345
+lines over 243 effects. The others answer *which animation is this action*; it answers
+*while this effect is up, play B where you would have played A*, which is how a power
+visibly changes a character's swing. Joining it needs three files, because a power does
+not name an effect directly -- `Powers.cfg` names an ACTION, `PowerActions.cfg` says what
+that action applies, and only then does `Effects.cfg` say what it overrides.
+
+It mattered more than its size suggests: **31 of its 37 target ANIMIDs are named by no
+other source**, including the whole 400-420 run, so those clips were exported but
+unreachable through this bundle -- 684 (skeleton, ANIMID) pairs, every one of which
+resolves to a track file already on disk.
 
 What it emits
 -------------
@@ -34,6 +47,8 @@ What it emits
     models.json     model -> skeleton, with race and sex where the model is a race rune
     items.json      item -> the ANIMIDs it selects, and its male/female render objects
     coverage.json   which (skeleton, action) pairs actually resolve, and which do not
+    overrides.json  effect -> the ANIMID swaps it makes, and the powers that apply it,
+                    plus the reverse lookup by the ANIMID being displaced
 
 Resolution is a two-step join, deliberately not materialised:
 
@@ -115,6 +130,146 @@ def slot_table(stream: ResStream) -> Optional[List[int]]:
 
 
 # --------------------------- config readers ---------------------------
+
+def cfg_blocks(path: Path, begin: str, end: str):
+    """Each BEGIN/END block in one of these configs, as its lines."""
+    if not path.exists():
+        return
+    current: Optional[List[str]] = None
+    for line in path.read_text(encoding="latin-1", errors="ignore").splitlines():
+        stripped = line.strip()
+        if stripped.startswith(begin):
+            current = []
+            continue
+        if stripped.startswith(end):
+            if current is not None:
+                yield current
+            current = None
+            continue
+        if current is not None:
+            current.append(line)
+
+
+def block_head(lines: List[str]):
+    """`<id> "<display name>" ...` from a block's first real line, or (None, None).
+
+    The `#EffectID EffectName Icon` comment at the top of Effects.cfg is skipped, which is
+    why this looks past comments rather than taking `lines[0]`.
+    """
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        found = re.match(r'\s*(\S+)\s+"([^"]*)"', line)
+        return (found.group(1), found.group(2)) if found else (stripped.split()[0], "")
+    return (None, None)
+
+
+def effect_overrides(path: Path) -> Dict[str, Dict[str, Any]]:
+    """
+    Effect id -> its display name and every `AnimOverride <from> <to>` it carries.
+
+    `AnimOverride` is the most common key in `Effects.cfg` -- 1,345 lines across 243 of the
+    2,950 effects -- and it is how an *active* effect replaces an animation: a power that
+    buffs your axe swing does it by overriding the swing's ANIMIDs with special-case ones.
+    Nothing else in this export read it, which left those clips unreachable: 31 of the 37
+    target ANIMIDs are named by no other source, including the whole 400-420 run.
+    """
+    out: Dict[str, Dict[str, Any]] = {}
+    for lines in cfg_blocks(path, "EFFECTBEGIN", "EFFECTEND"):
+        effect_id, name = block_head(lines)
+        if effect_id is None:
+            continue
+        body = "\n".join(lines)
+        pairs = [[int(a), int(b)]
+                 for a, b in re.findall(r"AnimOverride\s+(\d+)\s+(\d+)", body)]
+        out[effect_id] = {"name": name, "animOverrides": pairs}
+    return out
+
+
+def action_effects(path: Path, effect_ids: set) -> Dict[str, Dict[str, Any]]:
+    """
+    Power action id -> the verb it runs and the effects it names.
+
+    Effects are found by *membership*, not by position, because the verbs disagree about
+    where the effect sits. `ApplyEffect 1AX-001A 0` puts it first; `ApplyEffects 0
+    ITM-P-021A ITM-P-021B` puts two after a count; `DeferredPower 1AX-002A 0 AR-DB 2` names
+    one to apply now and one to defer. A fixed field would miss the second effect of every
+    `ApplyEffects` and would read `DEF-DB-8` -- which is not an effect id -- as one.
+    """
+    out: Dict[str, Dict[str, Any]] = {}
+    for lines in cfg_blocks(path, "POWERACTIONBEGIN", "POWERACTIONEND"):
+        action_id, _ = block_head(lines)
+        if action_id is None:
+            continue
+        head = next((l for l in lines if l.strip() and not l.strip().startswith("#")), "")
+        fields = head.split()
+        verb = fields[1] if len(fields) > 1 else ""
+        out[action_id] = {"verb": verb,
+                          "effects": [f for f in fields[2:] if f in effect_ids]}
+    return out
+
+
+def power_actions(path: Path) -> Dict[str, Dict[str, Any]]:
+    """Power code -> display name and the `ACTION=` ids it fires."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for lines in cfg_blocks(path, "POWERBEGIN", "POWEREND"):
+        code, name = block_head(lines)
+        if code is None:
+            continue
+        acts = []
+        for line in lines:
+            found = re.match(r"\s*ACTION=\s*(\S+)", line)
+            if found:
+                acts.append(found.group(1))
+        out[code] = {"name": name, "actions": acts}
+    return out
+
+
+def build_overrides(config: Path) -> Dict[str, Any]:
+    """
+    Join Powers -> PowerActions -> Effects and keep the ones that swap an animation.
+
+    Emitted rather than folded into `actions.json` because it is a different shape: every
+    other entry there says *this ANIMID means this*, while an override says *while this
+    effect is up, play B where you would have played A*. A consumer needs the pair.
+    """
+    effects = effect_overrides(config / "Effects.cfg")
+    actions = action_effects(config / "PowerActions.cfg", set(effects))
+    powers = power_actions(config / "Powers.cfg")
+
+    users: Dict[str, List[Dict[str, str]]] = defaultdict(list)
+    for code, power in powers.items():
+        for action_id in power["actions"]:
+            for effect_id in actions.get(action_id, {}).get("effects", []):
+                if effects.get(effect_id, {}).get("animOverrides"):
+                    users[effect_id].append({"power": code, "name": power["name"]})
+
+    by_effect: Dict[str, Any] = {}
+    by_source: Dict[str, Any] = defaultdict(list)
+    for effect_id, entry in sorted(effects.items()):
+        if not entry["animOverrides"]:
+            continue
+        seen = {u["power"]: u for u in users.get(effect_id, [])}
+        by_effect[effect_id] = {
+            "name": entry["name"],
+            "animOverrides": entry["animOverrides"],
+            "powers": sorted(seen.values(), key=lambda u: u["power"]),
+        }
+        for source, target in entry["animOverrides"]:
+            by_source[str(source)].append({"to": target, "effect": effect_id,
+                                           "effectName": entry["name"],
+                                           "powers": len(seen)})
+
+    # `targets` first because it answers the question on its own: 61 different effects
+    # override ANIMID 105 and between them they name 4 distinct replacements, so a consumer
+    # asking "what can play instead of 105" should not have to scan 61 rows to find out.
+    source_rows = {
+        source: {"targets": sorted({row["to"] for row in rows}), "byEffect": rows}
+        for source, rows in sorted(by_source.items(), key=lambda kv: int(kv[0]))
+    }
+    return {"byEffect": by_effect, "bySourceAnimId": source_rows}
+
 
 def named_animids(path: Path, key: str = "ANIMID") -> Dict[int, str]:
     """NAME=/ANIMID= pairs from a .cfg. The first NAME above an id owns it."""
@@ -255,6 +410,13 @@ def main() -> int:
     powers = block_animids(config / "Powers.cfg", "POWERBEGIN", "LOOPANIMID")
     actions = block_animids(config / "PowerActions.cfg", "POWERACTIONBEGIN",
                             "ATTACKANIMS", pairs=True)
+    overrides = build_overrides(config)
+    # The target is what actually plays while the effect is up, so that is the id a rig has
+    # to be able to resolve; the source is only the slot being displaced.
+    override_targets: Dict[int, set] = defaultdict(set)
+    for effect_id, entry in overrides["byEffect"].items():
+        for _source, target in entry["animOverrides"]:
+            override_targets[target].add(entry["name"] or effect_id)
 
     # -- items.json + models.json --------------------------------------
     cobjects = next(iter(sorted(dump.rglob("CObjects.cache"))), None)
@@ -328,6 +490,7 @@ def main() -> int:
         "parry": {str(k): v for k, v in sorted(parry_ids.items())},
         "combatIdle": {str(k): v for k, v in sorted(idle_ids.items())},
         "weaponSwing": {str(k): v for k, v in sorted(swing_ids.items())},
+        "animOverride": {str(k): sorted(v) for k, v in sorted(override_targets.items())},
     }
 
     # -- coverage.json -------------------------------------------------
@@ -339,6 +502,7 @@ def main() -> int:
         "parry": sorted(parry_ids),
         "combatIdle": sorted(idle_ids),
         "weaponSwing": sorted(swing_ids),
+        "animOverride": sorted(override_targets),
     }
     coverage: Dict[str, Any] = {}
     for skeleton_id, entry in resolve.items():
@@ -366,6 +530,13 @@ def main() -> int:
                         "note": "per item: the ANIMIDs it selects and its two render objects",
                         "items": items}),
         ("coverage.json", {"generator": generator, "note": note, "coverage": coverage}),
+        ("overrides.json", {"generator": generator,
+                            "note": ("While an effect is active it replaces animations: "
+                                     "bySourceAnimId[a] -> the id to play instead of `a`. "
+                                     "Resolve the target through resolve.json like any "
+                                     "other ANIMID. byEffect names the powers that apply "
+                                     "each effect."),
+                            **overrides}),
     ):
         (out / name).write_text(json.dumps(payload, indent=1), encoding="utf-8")
 
@@ -373,6 +544,13 @@ def main() -> int:
     print(f"skeletons {len(resolve)}  items {len(items)} (weapons {weapons})  "
           f"race models {len(models)}")
     print("ANIMID vocabulary: " + "  ".join(f"{k} {len(v)}" for k, v in action_rows.items()))
+    named_elsewhere = set().union(*(set(map(int, v)) for k, v in action_rows.items()
+                                    if k != "animOverride")) if action_rows else set()
+    only_here = sorted(set(override_targets) - named_elsewhere)
+    print(f"anim overrides: {len(overrides['byEffect'])} effects, "
+          f"{sum(len(e['animOverrides']) for e in overrides['byEffect'].values())} pairs, "
+          f"{len(overrides['bySourceAnimId'])} source ids -> {len(override_targets)} targets")
+    print(f"  {len(only_here)} target ANIMIDs are named by no other source: {only_here}")
     print(f"wrote {out}  in {time.time() - started:.1f}s")
     return 0
 

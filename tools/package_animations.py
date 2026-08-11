@@ -212,6 +212,7 @@ def main() -> int:
             "catalog[assetId] -> skeletonId and the GLB that holds the rig",
             "skeletonActions[skeletonId].actions[class][animid] -> clip + track file",
             "items[itemId] -> which ANIMID an equipped weapon selects",
+            "overrides.bySourceAnimId[animid] -> what an active effect plays instead",
             "apply track bones to GLB nodes BY NAME; skip names with no node",
         ],
         "counts": {
@@ -228,6 +229,7 @@ def main() -> int:
             "items": "animations/items.json",
             "models": "animations/models.json",
             "coverage": "animations/coverage.json",
+            "overrides": "animations/overrides.json",
             "modelDir": args.models,
             "trackDir": f"{args.tracks}/clips",
         },
