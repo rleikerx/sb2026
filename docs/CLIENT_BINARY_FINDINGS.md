@@ -117,7 +117,48 @@ Do not "fix" this without a test that can tell the two apart. The one that would
 a frame-accurate comparison against the client for a rig whose axis is *not* a right-angle
 multiple. Skeleton 18 has 6 such bones; the wing roots carry +/-167.3 degrees on Z.
 
-## 5) Open: the Aracoix wing fold
+## 5) Inside sb.exe: the ASF parser
+
+`sb.exe` is 18 MB of `.text` with no exports and no symbols, but the ASF keyword strings
+are each referenced exactly once, which pins the parser precisely. Imagebase `0x400000`.
+
+| token | handler VA | token | handler VA |
+|---|---|---|---|
+| `:VERSION` | `0x5d5e6d` | `NAME` | `0x5d63e7` |
+| `:NAME` | `0x5d5e89` | `DIRECTION` | `0x5d6415` |
+| `:MOTION` | `0x5d5eba` | `LENGTH` | `0x5d648b` |
+| `:UNITS` | `0x5d6001` | **`AXIS` (bone)** | **`0x5d64c3`** |
+| `:ROOT` | `0x5d6045` | `DOF` | `0x5d6542` |
+| `:BONEDATA` | `0x5d6069` | `ORDER` (root) | `0x5d61bc` |
+| `:HIERARCHY` | `0x5d608d` | `AXIS` (root) | `0x5d6210` |
+
+Three things read straight out of it:
+
+**Per-bone `axis` is stored raw at `bone+0x30`, scaled to radians.** From `0x5d64c3`:
+three floats are parsed, each multiplied by the angle-units factor at `[ebp-0x4c]`
+(what `:UNITS angle deg` sets), then written to `[eax]`, `[eax+4]`, `[eax+8]` where
+`eax = bone_struct + 0x30`. It is **not** converted to a matrix or quaternion at load
+time, so whatever consumes it does so during pose evaluation.
+
+**The root's `AXIS` and `POSITION` are parsed and discarded.** At `0x5d620f` and
+`0x5d622b` the token compare is followed by `test al,al; jne <next line>` with no
+handler body — matched, then dropped.
+
+**`ORDER` is stored, and only at root level.** `0x5d61bb` parses it and calls through
+`0x419042` / `0x40c09a` to keep it. The per-bone `AXIS` handler has no order handling at
+all, so every bone shares the root's order.
+
+What this does **not** answer: what reads `bone+0x30` during pose evaluation. That is the
+question the wing fold turns on, and it is not in the ASF parser. Note also that the ASF
+and AMC text loaders are likely dev-only paths -- the shipped client reads
+`Skeleton.cache` and `Motion.cache`, so the runtime composition lives in the cache-load
+and pose-evaluation code, not here. `<ArcMotion::LoadAMC>` is referenced from `0x5ba087`
+and `0x5baca1` if that path is wanted.
+
+Tooling: `tools/pe_reader.py` (section map, VA<->offset, xref search) and
+`tools/disasm_sb.py` (disassemble at a VA, annotating `.data` string operands).
+
+## 6) Open: the Aracoix wing fold
 
 Unresolved. The client's idle folds the Aracoix wings down the back to ankle height;
 our render of the same authored clip (`18000010`, slot 10) holds them out horizontally.
@@ -130,12 +171,25 @@ Ruled out with evidence, so nobody repeats them:
 | Euler order | XYZ/YXZ/XZY identical here; ZYX clearly wrong; client uses ZYX-composed = `Rz@Ry@Rx` |
 | `direction` also in the joint frame | collapses the model entirely |
 | handedness (negated Z euler) | helps Nephilim, hurts Aracoix |
-| axis composition `C*M*C^-1` | breaks humanoids, see section 4 |
+| axis composition `C*M*C^-1` | see section 4; 40 variants scored, best 12.84 deg vs 16.11 current |
+| quaternion component order | 4 orders scored, best 15.31 deg; no remap at all gives 166 deg, so a remap is definitely required |
+
+A systematic defect found late and still unexplained: **every animation leans back**.
+Client video of the Aracoix idle shows the spine vertical; our render of the same clip
+and frame leans **13.5 degrees back**, and the mean across rigs is 8-14 degrees while the
+rest pose is 0.0. It is not the root bone (root pitch is 0.3 to -3.3 on humanoid rigs);
+the lean is carried by LOWERBACK (-5.4 mean pitch) and UPPERBACK (-11.35). `tools/pose_invariants.py`
+scores it.
+
+One concrete smaller finding on the way: `ArcMotion`'s quaternion remap exempts bone 0
+(`if y == 0`) from the y/z swap it applies to every other bone. Dropping that exemption
+scores better -- 15.31 against 16.11 -- and a per-bone special case is the signature of
+trial-and-error rather than derivation. It is not the defect, but it looks wrong.
 
 Also established from client video: **the Nephilim idle spreads its wings and never
 folds them.** `_fold_wings` is aimed wrong for rigs 115/116.
 
-## 6) Reproducing this
+## 7) Reproducing this
 
 ```bash
 # exports, with RVAs
