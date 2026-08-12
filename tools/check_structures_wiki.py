@@ -28,8 +28,19 @@ The join, once the naming is right
 
 What is comparable, and what is not
 -----------------------------------
-`Architecture` and `Extras: not rankable` compare exactly -- the latter against
-`max_ranks == 1`, which is what the client stores for a building placed at its only rank.
+`Extras: not rankable` compares exactly, against `max_ranks == 1`, which is what the client
+stores for a building placed at its only rank.
+
+`Architecture` needs one qualification. `template_architecture` is **not a style label**:
+zones carry the same field and the client refuses a placement whose template tag is absent
+from the zone's list -- `PlaceError:ArchitectureCannotPlaceInZone`, "This city architecture
+cannot be placed in this zone". So the value is the set of zone architectures that will
+accept the asset, which for an ordinary building is just its own style. That is why
+grouping by it works, and it is why the test here is `style in architecture` rather than
+equality: 9 templates carry more than one entry and all of them are trainer halls, where
+the extra entries are biomes (`Elven Guild Hall` is `["Feudal", "Forest", "Mountains"]`).
+Those are excluded from the architecture check for that reason -- the wiki groups them
+under Trainer Buildings, which is not an architecture at all.
 
 `Hirelings` is compared as presence rather than by name: the wiki names the NPC types a
 building accepts (`Guard Captain`, `Banker`) where the cache stores a per-rank *count*.
@@ -52,10 +63,20 @@ All 52 sections match a template, and 102 of 107 comparable fields agree: archit
 wall**, in two groups, and both look like properties of the cache rather than of this
 comparison.
 
-  * `Irekei Outer Walls` is typed `Feudal`. The three templates building the Irekei wall
-    pieces carry `architecture: ["Feudal"]`, where the Elven and Invorri gate, stair and
-    straight sections are all typed correctly. Only their *cap* pieces are Feudal too, so
-    this is not simply "walls are untyped" -- the Irekei set alone is styled wrong.
+  * `Irekei Outer Walls` is tagged `Feudal`. Templates 2000192/3/4 build the Irekei gate,
+    stair and straight-wall pieces and carry `architecture: ["Feudal"]`, where the Elven
+    (2000209/11/12) and Invorri (2000227/8/9) equivalents carry their own style. It is not
+    that walls go untagged: **2000195 and 2000196, the Irekei towers, sit in the same
+    contiguous id block, have the same dual-name shape, and are tagged `Irekei`.** Wall
+    *caps* are Feudal in all three styles, which does look deliberate -- they are shared
+    geometry, and the Invorri block's caps even build the unprefixed `Outer Wall Cap`
+    structures.
+
+    Left as the cache has it. Since the tag is a placement filter and the playable zones
+    permit Feudal almost everywhere, the consequence is that those three appear under the
+    Feudal list rather than the Irekei one -- an inconsistency with the block around them,
+    not a building that cannot be placed. Overwriting it would put invented data into an
+    export whose whole value is being what shipped.
   * **No wall template allows a hireling at any rank.** The wiki gives all four wall
     families `Archer Captain, Wall Archer, Tower Artillery Captain`; every wall template
     here reads `-1` at every rank, including the `Outer Wall with Tower` pieces, which

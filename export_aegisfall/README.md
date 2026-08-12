@@ -414,7 +414,7 @@ wiki documents several of them. New columns:
 
 | column | on | what it is |
 |---|---|---|
-| `architecture` | 290 templates | Feudal, Elven, Northman, Irekei — how the wiki groups its list |
+| `architecture` | 290 templates | **which zones will accept this**, not a style label — see below |
 | `max_ranks` | 294 | `1` is the wiki's "not rankable": placed at its only rank, never upgrades. 139 templates |
 | `start_rank`, `asset_type` | 294 | where the ladder begins, and what class of asset it is |
 | `zone_influence`, `zone_no_build` | 294 | city projection and exclusion radii, **world units** — divide by `unitsPerMetre` |
@@ -442,19 +442,50 @@ Feudal is the default style, spells `Invorii` where the cache spells `Invorri`, 
 **All five disagreements are walls**, and both look like the cache rather than the
 comparison:
 
-- `Irekei Outer Walls` is typed `Feudal` — the three templates building the Irekei wall
+- `Irekei Outer Walls` is tagged `Feudal` — the three templates building the Irekei wall
   pieces carry `architecture: ["Feudal"]`, where the Elven and Invorri gate, stair and
-  straight sections are typed correctly.
+  straight sections are tagged by style. See the note on what that field means, below;
+  the effect is that those three are offered under the Feudal list rather than the Irekei
+  one, and they remain placeable in every zone that permits Feudal, which is nearly all
+  of them. **Left exactly as the cache has it.**
 - **No wall template allows a hireling at any rank**, though the wiki gives all four wall
   families `Archer Captain, Wall Archer, Tower Artillery Captain`. Every wall template
   reads `-1` at every rank; the `Outer Wall with Tower` pieces reach `0` and no higher. If
   the wiki is right, wall garrisons are assigned server-side.
 
-Two things the wiki documents that the cache genuinely does not have, so they are absences
-rather than gaps in this export: **Cost** (the wiki quotes a builder's price; the client
-ships three generic deed rows, all value 0 or 1 — prices are server-side) and **Size** as a
-grid footprint (`zone_no_build` and `zone_influence` are radii in world units, a different
-quantity, and mapping one to the other would manufacture agreement rather than test for it).
+### `architecture` is a zone-placement tag, not a style label
+
+This matters if you are grouping buildings by it. Zones carry the same field —
+`zones/index.json` now exports it as `architecture`, which it did not before — and the
+client refuses a placement whose template tag is absent from the zone's list, with
+`PlaceError:ArchitectureCannotPlaceInZone`: *"This city architecture cannot be placed in
+this zone."* So the template's value is **the set of zone architectures that will accept
+the asset**.
+
+For an ordinary building that set is just its own style, which is why grouping by it works
+and why it agrees with the wiki 43 times out of 44. But it is not the same statement, and
+two things follow from the difference:
+
+- The vocabulary is mixed. Alongside `Feudal`/`Elven`/`Northman`/`Irekei` it carries biome
+  tokens, and **all 9 templates with more than one entry are trainer halls** — `Elven
+  Guild Hall` is `["Feudal", "Forest", "Mountains"]`, which is where it may go, not what
+  it looks like. Read that row as a style and you will call an Elven building Feudal.
+- 837 of the 861 zones carry an empty list. The playable continents carry
+  `["Feudal", "Irekei", "Northman", "Elven"]` or a subset — `Tyrranth Major` omits
+  Northman, `Uthgaard` is Elven only.
+
+**Size** as a grid footprint has no counterpart: `zone_no_build` and `zone_influence` are
+radii in world units, a different quantity, and mapping one to the other would manufacture
+agreement rather than test for it.
+
+**Correction on Cost.** An earlier version of this section said prices were server-side
+because `items.json` holds only three generic deed rows. That is true of `items.json` and
+false of the cache: deeds are a **separate asset kind**, and the cache carries **880 of
+them**, each with `item_value` — `Inner Wall Gate Deed` 48,000, `Outer Wall Gatehouse
+Deed` 80,000 — plus `deed_structure_id`, `deed_start_rank` and `deed_employment`.
+`export_content.py` does not read `AssetKind.DEED` at all, so none of it is exported yet.
+Cost is checkable against the wiki once it is; that is the next thing to do here, not a
+settled absence.
 
 The *Tree of Life* rank table remains the one unresolved item: its wiki health ladder
 (80,000 → 500,000) does not match ours (3,000 → 25,000 on the template that builds it),

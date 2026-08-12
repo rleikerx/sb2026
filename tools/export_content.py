@@ -336,9 +336,20 @@ def main() -> int:
             "template_id": getattr(cobj, "template_id", None),
             "render_ids": list(getattr(cobj, "render_ids", []) or []),
             "ranks": ranks,
-            # Which of the five architecture styles this is built in. The wiki groups its
-            # building list by exactly this, and it is `Invorri` here against the wiki's
-            # `Invorii`. Empty on 4 templates.
+            # **A zone-placement tag, not a style label**, though for an ordinary
+            # building the two coincide and the wiki groups its list by it.
+            #
+            # Zones carry the same field (`zone_architecture`, now in
+            # zones/index.json), and the client refuses a placement whose template tag
+            # is absent from the zone's list -- `PlaceError:ArchitectureCannotPlaceInZone`,
+            # "This city architecture cannot be placed in this zone." So this is the set
+            # of zone architectures that will accept the asset.
+            #
+            # That is why the vocabulary is mixed: alongside Feudal/Elven/Northman/Irekei
+            # it carries biome tokens, and the 9 templates with more than one entry are
+            # all trainer halls -- `Elven Guild Hall` is `["Feudal", "Forest",
+            # "Mountains"]`, which is where it may go rather than what it looks like.
+            # `Invorri` here against the wiki's `Invorii`. Empty on 4 templates.
             "architecture": f.get("template_architecture") or [],
             # `max_ranks` 1 is the wiki's "not rankable": the building is placed at its
             # only rank and never upgrades. 139 of the 294 templates are like this.

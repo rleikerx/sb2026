@@ -245,6 +245,14 @@ def main() -> None:
             "zoneType": zone.zone_type,
             "minorRadius": zone.zone_minor_radius,
             "majorRadius": zone.zone_major_radius,
+            # Which city architectures may be built here. This is the other half of
+            # `content/structures.json`'s `architecture`: the client refuses a placement
+            # whose template tag is absent from this list, with
+            # `PlaceError:ArchitectureCannotPlaceInZone` -- "This city architecture cannot
+            # be placed in this zone." Without it that field cannot be evaluated at all.
+            # 837 of the 861 zones carry an empty list; the playable continents carry
+            # `["Feudal", "Irekei", "Northman", "Elven"]` or a subset.
+            "architecture": list(getattr(zone, "zone_architecture", []) or []),
             "props": len(record["props"]),
             "spawns": len(record["spawns"]),
             "file": f"placements/{stem}.json",
