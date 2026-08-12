@@ -317,12 +317,47 @@ def main() -> int:
                         "projectileId": weapon.get("weapon_projectile_id") or None,
                         "projectileSpeed": weapon.get("weapon_projectile_speed") or None}
                        if (weapon := f.get("item_weapon")) else None),
+            # **The armour half of the same hole `damage` was.** 2,361 items are ARMOR and
+            # this table carried no protection value at all; `item_defense_rating` sits on
+            # 1,574 of them, from a Dwarven Plate Breastplate's 33 downwards. A weapon
+            # table without damage and an armour table without armour are the same defect,
+            # and only the first one had been found.
+            "defense_rating": f.get("item_defense_rating"),
+            # Durability. `check_items_wiki.py` has been parsing the wiki's `Durability:`
+            # since it was written and comparing it against a column that did not exist,
+            # so it silently compared nothing on every row.
+            "durability": f.get("item_health_full"),
+            # Encumbrance, armour only.
+            "bulk_factor": f.get("item_bulk_factor"),
             "level_req": f.get("item_level_req"),
             "rank_req": f.get("item_rank_req"),
             "skill_used": f.get("item_skill_used"),
+            # The skill you need to use it at all, distinct from `skill_used` above:
+            # a Battle Axe is `[{"skill": "Axe", "level": 0}]`.
+            "skill_requirements": [
+                {"skill": s.get("skill_type"), "level": s.get("skill_level")}
+                for s in (f.get("item_skill_req") or []) if isinstance(s, dict)
+            ],
             "eligible_races": allowed(f.get("item_race_req"), "races", playable_races),
             "eligible_classes": allowed(f.get("item_class_req"), "classes",
                                         player_classes),
+            # 75 items name a discipline outright; the rest are unrestricted. Same
+            # `restrict` semantics as races and classes -- see `allowed`.
+            "eligible_disciplines": allowed(f.get("item_disc_req"), "discs", []),
+            # **1,030 items are sex-restricted** -- 942 female, 88 male -- and nothing
+            # recorded it. `None` means either sex may equip.
+            "sex_req": (f.get("item_sex_req")
+                        if f.get("item_sex_req") not in (None, "NONE") else None),
+            # Armour renders from a different mesh on a female body: 1,380 pieces carry
+            # one. Binding the male mesh to a female skeleton is a visible error.
+            "render_object_female": f.get("item_render_object_female") or None,
+            # Only SLASHING, CRUSHING and PIERCING are ever nonzero, on ~1,025 armour
+            # pieces. Zero entries are dropped rather than shipped as a wall of 0.0.
+            "resistances": {k: v for k, v in
+                            (f.get("combat_attack_resist") or {}).items() if v},
+            "sheathable": bool(f.get("item_sheathable")),
+            # An ANIMID -- resolve through animations/resolve.json per skeleton.
+            "parry_anim_id": f.get("item_parry_anim_id"),
             "flags": list(f.get("item_flags") or []),
         })
 
