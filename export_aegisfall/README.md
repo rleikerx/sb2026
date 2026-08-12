@@ -435,25 +435,35 @@ That is the same mistake as the two perfect scores described above — a check t
 cover the thing cannot clear it — and "the wiki has nothing on this" turned out to be a
 statement about the search rather than about the wiki.
 
-`python tools/check_structures_wiki.py` matches **all 52** and agrees on **154 of 159**
-comparable fields: architecture 43/44, `not rankable` 11/11, hirelings 48/52, **cost 52/52**. The join
+`python tools/check_structures_wiki.py` matches **all 52** and agrees on **all 159**
+comparable fields: architecture 44/44, `not rankable` 11/11, hirelings 52/52, cost 52/52. The join
 needs three naming rules, all mechanical — the wiki drops the `Feudal ` prefix because
 Feudal is the default style, spells `Invorii` where the cache spells `Invorri`, and writes
 `Cottage [Log, Stone, Wood]` for three separate rows.
 
-**All five disagreements are walls**, and both look like the cache rather than the
-comparison:
+Two earlier versions of this section reported wall disagreements. Both were the
+comparison's fault, and the resolution is worth knowing because it turns on which field
+records a hireling.
 
-- `Irekei Outer Walls` is tagged `Feudal` — the three templates building the Irekei wall
-  pieces carry `architecture: ["Feudal"]`, where the Elven and Invorri gate, stair and
-  straight sections are tagged by style. See the note on what that field means, below;
-  the effect is that those three are offered under the Feudal list rather than the Irekei
-  one, and they remain placeable in every zone that permits Feudal, which is nearly all
-  of them. **Left exactly as the cache has it.**
-- **No wall template allows a hireling at any rank**, though the wiki gives all four wall
-  families `Archer Captain, Wall Archer, Tower Artillery Captain`. Every wall template
-  reads `-1` at every rank; the `Outer Wall with Tower` pieces reach `0` and no higher. If
-  the wiki is right, wall garrisons are assigned server-side.
+**Hirelings live in `valid_npc_categories`, not in `ranks[].hirelings`.** These are
+different quantities. `valid_npc_categories` is which NPC classes may be stationed —
+**category 27 is the wall-tower and gatehouse slot**, carried by `Concave Tower`, `Convex
+Tower`, `Outer Wall with Tower` and `Gate House` in all four styles, and **28 is
+`Artillery Tower`**. Between them they are exactly the wiki's `Archer Captain, Wall Archer,
+Tower Artillery Captain`. `ranks[].hirelings` is a per-rank *count*, and it reads 0 on
+every one of those towers while reading 1–4 on buildings with no NPC category at all.
+Neither implies the other — **if you are asking "can this be garrisoned", read both.**
+
+The archers go in the towers, which is where you would put them.
+
+**One oddity remains in the data, unchanged and unaltered.** Templates 2000192/3/4 — the
+Irekei gate, stair and straight-wall pieces — carry `architecture: ["Feudal"]` where the
+Elven (2000209/11/12) and Invorri (2000227/8/9) equivalents carry their own style. It no
+longer shows as a wiki disagreement, because the Irekei *towers* (2000195/6) are tagged
+`Irekei` and belong to the same wall section, so the set as a whole is available to Irekei.
+The narrow fact still matters if you group buildings by this field: **three Irekei wall
+pieces will sort under Feudal.** Nothing in the export was changed to produce the
+agreement.
 
 ### `architecture` is a zone-placement tag, not a style label
 
