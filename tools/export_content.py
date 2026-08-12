@@ -16,6 +16,7 @@ What it emits (mechanical data only - no lore or description prose):
     talents.json      talent runes
     items.json        equippable items: slot, weight, value, damage, requirements
     character_creation.json  what the creation screen actually offers, per the client
+    starting_kits.json  what each race/sex/class combination starts the game holding
     deeds.json        the 880 buildable deeds: price, what they place, start rank
     structures.json   buildings: rank progression, health, and the mesh that
                       renders each rank
@@ -553,6 +554,55 @@ def main() -> int:
         print("character creation: "
               + ", ".join(f"{k} {len(v)}" for k, v in creation.items()))
 
+    # --- what a new character is handed -----------------------------------------------
+    #
+    # `Config/StartingKitTable.cfg`: 68 race/sex/class blocks, each listing the weapon
+    # styles that combination may start with and the items that come with each. All 46
+    # item ids resolve against `items.json`, and the vocabulary is exact -- every one of
+    # the 12 playable races, all four base classes, both sexes, nothing left over.
+    #
+    # **The columns are not reliably positional.** The file's own header says
+    # `Legs Torso Feet Hand Weapon Inv1 Inv2 Inv3`, and most rows honour it, but a `Bow`
+    # row puts the bow in the fourth column and leaves the rest blank. Rather than trust
+    # the position, each id is resolved and the item's own `equip_slots` says where it
+    # goes -- which is data the export already carries and cannot drift out of step.
+    kits: List[dict] = []
+    kit_cfg = REPO_ROOT / "export_aegisfall" / "config" / "Config" / "StartingKitTable.cfg"
+    if kit_cfg.exists():
+        import re as _re
+        by_item = {r["asset_id"]: r for r in items}
+        current: Optional[dict] = None
+        for line in kit_cfg.read_text(encoding="latin-1", errors="ignore").splitlines():
+            head = _re.match(r'RACE=\s*(\S+)\s+(\S+)\s+"([^"]*)"', line.strip())
+            if head:
+                current = {"race": head.group(1), "sex": head.group(2),
+                           "class": head.group(3), "loadouts": []}
+                kits.append(current)
+                continue
+            if current is None or line.strip().startswith("#"):
+                continue
+            body, _, label = line.partition("#")
+            ids = [int(x) for x in _re.findall(r"\b(\d+)\b", body)]
+            if not ids:
+                continue
+            current["loadouts"].append({
+                "label": clean(label) or None,
+                "items": [{"asset_id": i,
+                           "name": (by_item.get(i) or {}).get("name"),
+                           "type": (by_item.get(i) or {}).get("type"),
+                           "equip_slots": (by_item.get(i) or {}).get("equip_slots") or []}
+                          for i in ids],
+            })
+        # The kits should offer a class only where the race can take it. Reported rather
+        # than asserted -- a mismatch would be a finding about the cache, not a crash.
+        offered = {(k["race"], k["class"]) for k in kits}
+        bad = [f"{r}/{c}" for r, c in sorted(offered)
+               if c not in (races.get(r, {}).get("classes") or [])]
+        print("starting kits: " + str(len(kits)) + " race/sex/class blocks, "
+              + str(sum(len(k["loadouts"]) for k in kits)) + " loadouts"
+              + ("; NOT eligible for that class: " + str(bad) if bad else
+                 "; every one is a class that race may take"))
+
     tables = {
         "races.json": sorted(races.values(), key=lambda r: r["race"]),
         "classes.json": sorted(classes, key=lambda r: r["name"]),
@@ -562,6 +612,7 @@ def main() -> int:
         "structures.json": structures,
         "deeds.json": sorted(deeds, key=lambda r: (r["name"], r["asset_id"])),
         "character_creation.json": creation,
+        "starting_kits.json": kits,
     }
     corrected = [s for s in structures if "architecture_shipped" in s]
     if corrected:
