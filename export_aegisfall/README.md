@@ -45,6 +45,7 @@ some numbers you may already have baked are wrong rather than merely stale.
 | `content/enchantments.json` | **new** — 524 item prefixes/suffixes with reagent costs; explains the `ITEM-A`/`ITEM-B` effects |
 | `content/starting_kits.json` | **new** — 68 race/sex/class blocks, 451 starting loadouts |
 | `content/guild_ranks.json` | **new** — 21 charters, 163 rank titles; three are fully implemented but have no charter deed |
+| `content/guild_rules.json` | **new** — guild standing benefits (double XP, half death loss), governments, laws |
 
 ### Take these — they are new
 
@@ -335,6 +336,7 @@ convenience."* This is that same mechanical data read out of the shipped client.
 | `enchantments.json` | 524 | **new** — reagent cost, added value and mods for every item prefix and suffix |
 | `starting_kits.json` | 68 | **new** — 451 loadouts: what each race/sex/class combination starts holding |
 | `guild_ranks.json` | 21 | **new** — 163 rungs across the guild charters, with female forms and the charter deed |
+| `guild_rules.json` | — | **new** — what sovereign/sworn/errant standing is worth, the four governments and their laws |
 | `structures.json` | 1,062 | **two record types**: 294 buildable templates with a rank ladder, architecture, city radii and NPC slots; 768 named structures with floors, levels and doors. See below |
 | `powers.json` | 1,465 | cost, target, area, cast time, prerequisites, the ACTION chain, and every message string |
 | `effects.json` | 2,950 | what a power *does*: mods, conditions, animation overrides, and who applies it |
@@ -614,6 +616,45 @@ duplicate pair is real is a better answer than either alone.
 **If you are building a creation screen, drive it from this file, not from
 `standard_creation`.** Three race variants are likewise flagged but not offered
 (Half-Giant 2019, Human 253000/253001, all male body variants).
+
+### guild_rules.json — what guild standing is actually worth
+
+**New, and the last config in the archives.** `Config/GuildServerConfig.cfg`. The
+mechanically important part is a set of triples the file labels itself
+`# [Sovereign] [Sworn] [Errant]` — **the benefits of guild standing, derivable from nowhere
+else in this export**:
+
+| setting | sovereign | sworn | errant |
+|---|---:|---:|---:|
+| `HEALTHRECOVER` | 200 | 180 | 0 |
+| `MANARECOVER` | 200 | 180 | 0 |
+| `XPBONUS` | 100 | 80 | 0 |
+| `RECALLOPERATION` | 1 | 1 | 0 |
+| `DEATHLOSS` | 0.5 | 0.5 | **1.0** |
+
+`XPBONUS` *adds*, per the file's own comment: 100 means double experience. `DEATHLOSS`
+runs the other way — an unaffiliated character loses full value on death where a guilded
+one loses half. Being in a sovereign guild is worth double XP and half the death penalty.
+
+Also carried: `TREE_PENALTY_DIST` 576 (dying near a tree), the ball/banish/quit expiry
+windows as `{minutes, days}`, `WHITE_BALL_THRESH`/`BLACK_BALL_THRESH` 5 apiece, the four
+governments (`DEMOCRACY`, `REPUBLIC`, `OLIGARCHY`, `AUTOCRACY`) with their 11 actions
+each, and the two laws those actions resolve to —
+`LawsSimpleInnerCouncilAndLeader` and `LawsSimpleLeaderOnly`, which differ by exactly one
+rank: whether the inner council may act, or only the leader and above.
+
+**Two ids do not resolve and are passed through raw.** `TREEOBJECTID= 547` and
+`TREE_EFFECT_ID= 47` match no asset of any kind in this cache. The deed that actually
+plants a Tree of Life is `Guild Seed`, **asset 558**, value 1,500,000, targeting structure
+24200. 547 is close to 558 and is *not* it; the link is not made here because there is no
+evidence for it.
+
+**The tail of the file is a fourth independent source for the playable vocabulary.** A
+"listing of valid UIDs": 12 `MASTER_RACE` and 26 `MASTER_CLASS` entries. They match the 12
+races flagged `standard_creation` and `classes.json` minus `Pet` **exactly, in both
+directions**. That independently confirms excluding `Pet` from the class universe — a
+judgement call made while fixing the `restrict` flag, now agreed to by a config file with
+no connection to the rune records or to the wiki.
 
 ### guild_ranks.json — the 21 charters and their rank ladders
 
@@ -1578,7 +1619,8 @@ have to find them again:
 | ~~`StartingKitTable.cfg`~~ | 20,092 | **now exported** as `content/starting_kits.json` — see above |
 | ~~`Ranks_*.cfg`~~ | 21 files | **now exported** as `content/guild_ranks.json` — see above |
 | `GuildGovConfig.cfg` | 3 KB | government names per guild type — **read, and its BEGIN/END mismatch documented above**; not exported |
-| `GuildServerConfig.cfg`, `Guild_Restrictions.*` | ~8 KB | guild mechanics: `XPBONUS`/`HEALTHRECOVER`/`DEATHLOSS` by guild status, `TREE_PENALTY_DIST`, `TREEOBJECTID` |
+| ~~`GuildServerConfig.cfg`~~ | 5.6 KB | **now exported** as `content/guild_rules.json` — see above |
+| `Guild_Restrictions.*` | 2.9 KB x57 | per-server guild restrictions; 57 near-identical copies, not exported |
 
 `RaceClassDiscTalents.cfg` is a UID-to-English name table for the race, class, discipline
 and talent vocabularies — useful for resolving tokens, and the race list in it includes the
