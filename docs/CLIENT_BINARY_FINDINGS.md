@@ -226,8 +226,20 @@ Results, rig 18 (`18000010`, slot 10), against the client video:
 | head off vertical | +13.2 deg | -3.7 deg |
 | lowest wing-tip height | 87% of stature above the ankle | 28% |
 
-The remaining -3.6 degrees is a slight *forward* lean and is not the original defect
-inverted; whether it is authored posture or a further error is not settled.
+The remaining -3.6 degrees is a slight *forward* lean, and it is **posture rather than
+error** -- settled since, so nobody hunts it again:
+
+| measurement | what it rules out |
+|---|---|
+| spine axis is `(90, 0, 180)` on every rig, leans range -9.94 to +1.09 | a conjugation residual, which cannot vary where the frame does not |
+| ROOT pitches back +5.20; strip it and the spine reads -8.35, not -3.17 | root handling; the root is already correcting the spine, an ordinary idiom |
+| across 150 clips per rig the spine reaches +9.83 (rig 18) and +8.51 (rig 120) | a clamp -- leaning back is well within what this math produces |
+| rigs 6 and 103 share clip 6000010 and read +0.38 / +0.32; four rigs with four different clips land near -3.2 | anything structural; it tracks the clip |
+
+The median clip on every rig sampled leans forward 3 to 8 degrees, which is what a body at
+rest does. Three degrees over a torso is about eight centimetres of head travel -- inside
+what "the client holds it vertical" can mean read off a video. Driving it to zero would be
+fitting the math to an eyeball.
 
 **An independent check, not a fit.** The same math has to fold the Aracoix wings and leave
 the Nephilim's spread -- the doc's own note from client video. It does: on rig 18 the wing

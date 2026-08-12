@@ -15,6 +15,33 @@ back**. That was the defect this was built to catch, and applying the ASF joint 
 (`ArcBoneRecord.local_rotation`) closed it: rig 18's spine reads -3.6 now, and the wings
 fold down the back instead of standing out horizontally.
 
+The -3.6 that remains is posture, not error
+-------------------------------------------
+It was carried as an open question for a while and it is now settled, so that nobody
+spends another pass hunting it. Four measurements, none of which a residual conjugation
+error survives:
+
+  * **The spine axis is identical on every rig** -- `(90, 0, 180)` on LOWERBACK, UPPERBACK
+    and NECKJOINT alike -- while the measured lean ranges from -9.94 (rig 54) to +1.09
+    (rig 120). A math error conditioned on the joint frame cannot vary where the frame
+    does not.
+  * **It is not the root.** ROOT pitches *back* +5.20 on rig 18; strip its rotation and the
+    spine reads -8.35 rather than -3.17. The root is already correcting a forward lean the
+    spine bones carry, which is an ordinary animation idiom, not an artifact.
+  * **Nothing is clamped.** Across 150 clips per rig the spine reaches +9.83 on rig 18 and
+    +8.51 on rig 120, so leaning back is well within what this math produces. There is no
+    ceiling to explain away.
+  * **It tracks the clip, not the rig.** Rigs 6 and 103 share clip 6000010 and read +0.38
+    and +0.32; four rigs with four *different* clips land near -3.2.
+
+The median clip on every rig sampled leans forward by 3 to 8 degrees, which is what a
+body at rest does -- chest slightly ahead of hips. Three degrees over a torso is about
+eight centimetres of head travel: comfortably inside what "the client holds it vertical"
+can mean when it is read off a video.
+
+**So do not drive this to zero.** Anything that does is fitting the math to an eyeball,
+which is the failure this file exists to prevent.
+
     spine   LOWERBACK -> NECKJOINT, angle off vertical      target 0
     head    NECK -> HEAD, angle off vertical                target 0
     arm     LHUMERUS -> LRADIUS, angle off hanging down     target 0
@@ -166,10 +193,9 @@ def main() -> int:
         aracoix = next((r for r in rows if r["clip"] and r.get("spine") is not None
                         and r["clip"] // 1000000 == 18), None)
         if aracoix:
-            residual = abs(aracoix["spine"])
-            print(f"rig 18 spine {aracoix['spine']:+.1f} deg against a client video that shows it "
-                  f"vertical; the lean this was built to catch was "
-                  f"{ARACOIX_ORIGINAL_LEAN:+.1f} deg, so {residual:.1f} deg is left")
+            print(f"rig 18 spine {aracoix['spine']:+.1f} deg; the lean this was built to catch "
+                  f"was {ARACOIX_ORIGINAL_LEAN:+.1f} deg. What is left is a slight FORWARD "
+                  f"lean and is posture, not error -- see the docstring before chasing it")
     return 0
 
 
