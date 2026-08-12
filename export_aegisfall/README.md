@@ -44,7 +44,7 @@ some numbers you may already have baked are wrong rather than merely stale.
 | `zones/macrozones.json` | **new** — 135 zones with continent and level band; zone→continent was never open |
 | `content/enchantments.json` | **new** — 524 item prefixes/suffixes with reagent costs; explains the `ITEM-A`/`ITEM-B` effects |
 | `content/starting_kits.json` | **new** — 68 race/sex/class blocks, 451 starting loadouts |
-| `content/guild_ranks.json` | **new** — 21 charters, 163 rank titles; three charters look like cut content |
+| `content/guild_ranks.json` | **new** — 21 charters, 163 rank titles; three are fully implemented but have no charter deed |
 
 ### Take these — they are new
 
@@ -637,11 +637,45 @@ Centurion/Dark Captain/Dread Lord.
 use short forms (`Aracoix K'hree` → `Kh'ree Charter`, `Temple of the Cleansing Flame` →
 `Templar Charter`).
 
-**Three charters have no deed and no wiki page**, and are most likely cut content still
-sitting in the config: **Coven of Brialla**, **Academy of Heralds**, **Pirate's Crew**.
 Three more differ in name between the config and the wiki, which reads as a rename rather
 than a mismatch — `Cult of the Dark Ones`/*Cult of the Scourge*, `Military`/*Military
 Legion*, `Thieves' Band`/*Thieves' Den*. 15 of the 21 match `Category:Charters` outright.
+
+#### Coven of Brialla, Academy of Heralds and Pirate's Crew
+
+These three have **no charter deed and no wiki page** — so no player could found one, and
+none is documented. An earlier version of this section called them "most likely cut content
+still sitting in the config". That was too weak. They are **fully implemented and reachable
+from nothing**:
+
+| present in | |
+|---|---|
+| `Ranks_*.cfg` | complete rank ladders — 8, 8 and 6 rungs |
+| `GuildGovConfig.cfg` | a government entry each, alongside the other 18 |
+| `sb.exe` | `GuildTypeName:Coven`, `:Heralds`, `:Pirate` UI string keys |
+| `sb.exe` | entries in the guild-crest token list |
+
+**absent from:** the 17 charter deeds, and the wiki. Nothing else. The client would have
+named them, governed them and drawn their crests correctly; there was simply nothing to
+buy. `GuildGovConfig.cfg` carries all 21 guild types with nothing unmatched in either
+direction against the 21 rank files.
+
+One inference deliberately not drawn: all three take the generic government names (Common
+Rule / Council Rule / Republic Rule / Despot Rule) where Military has *Militocracy* and
+Noble has *Feodality*, which looks like a stub — but **eight live guilds are generic too**
+(Aracoix, Centaur, Cult, Dwarves, HighCourt, Oblivion, Unholy, Virakt), so it says nothing
+about these three.
+
+`Brialla` herself is fully present and is a **deity**, not a guild concept: one of six with
+a holy symbol amulet (`Brialla's Symbol`, 680140) and one of five with a placeable statue
+and 400,000-gold deed. The cache spells her **both ways** — `Brialla` on the symbol and the
+coven, `Braialla` on the statue and on `Braialla's Blade`.
+
+**One authoring bug in `GuildGovConfig.cfg`, reported rather than repaired.** Three blocks
+close with the wrong label: `BEGIN WIZARD` … `END WIZARDS`, and both `BEGIN ARACOIX` and
+`BEGIN CENTAUR` close with `END OBLIVION`. A parser that pairs `BEGIN X` with `END X`
+silently drops Aracoix and Centaur and reports 19 guild types instead of 21 — which is what
+happened on the first pass here. Split on `BEGIN` and stop at the next `END`.
 
 ### starting_kits.json — what a new character is handed
 
@@ -1543,7 +1577,8 @@ have to find them again:
 | ~~`PowActionCostInfo.cfg`~~ | 47,675 | **now exported** as `content/enchantments.json` — see below |
 | ~~`StartingKitTable.cfg`~~ | 20,092 | **now exported** as `content/starting_kits.json` — see above |
 | ~~`Ranks_*.cfg`~~ | 21 files | **now exported** as `content/guild_ranks.json` — see above |
-| `GuildGovConfig.cfg`, `GuildServerConfig.cfg`, `Guild_Restrictions.*` | ~11 KB | guild government rules and per-server restrictions |
+| `GuildGovConfig.cfg` | 3 KB | government names per guild type — **read, and its BEGIN/END mismatch documented above**; not exported |
+| `GuildServerConfig.cfg`, `Guild_Restrictions.*` | ~8 KB | guild mechanics: `XPBONUS`/`HEALTHRECOVER`/`DEATHLOSS` by guild status, `TREE_PENALTY_DIST`, `TREEOBJECTID` |
 
 `RaceClassDiscTalents.cfg` is a UID-to-English name table for the race, class, discipline
 and talent vocabularies — useful for resolving tokens, and the race list in it includes the
