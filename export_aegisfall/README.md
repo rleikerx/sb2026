@@ -332,6 +332,29 @@ Spi 35`, caps `95 / 120 / 95 / 105 / 85`, 24 eligible classes.
 Where they disagree the cache is authoritative, but a disagreement is itself
 worth understanding before overwriting anything.
 
+### races.json agrees with the wiki on every number
+
+`python tools/check_races_wiki.py`. The only one of the four wiki comparisons that found
+nothing wrong, which is a result rather than the absence of one — the other two that could
+be run turned up a misnamed field and a column empty on all 4,021 rows.
+
+| | |
+|---|---|
+| creation cost | **12 / 12** |
+| base attributes | **60 / 60** |
+| attribute caps | **60 / 60** |
+| eligible classes | **167 / 167** |
+
+`Category:Races` holds exactly the twelve races `races.json` flags `standard_creation`,
+which independently confirms that flag. So the 33 rows are 12 playable races plus 21
+creature families (Animal, Construct, Dragon, Insect, Undead, Siege…), and the flag
+separating them is right.
+
+Two false alarms on the first pass, both the comparison's fault rather than either source's,
+and both now handled in the tool: four pages write the attribute as a wiki link (`40 Base
+[[Strength]]`), which reported 0/5 for those races; and the wiki wraps long class lists with
+`<br>`, which read as a `<br> Prelate` entry and held the class match at 154/167.
+
 `items.json` carries equip slots, which is the field that lines up with the
 `EquipSlot` values `@aegisfall/sim` already stores per character.
 
