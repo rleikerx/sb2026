@@ -719,17 +719,43 @@ one that also falls, and `111000055` is the interesting one. All three drive ske
 geometry, so any of them can be played on a human model already in `models_rigged/` without
 touching the rig.
 
-The rest of the unbound 18, for anyone shopping:
+A rig here is mostly a *clip table*, not a body. **Thirteen skeletons share skeleton 1's
+bones exactly** — 1, 7, 9, 16, 98, 101, 102, 110, 111, 112, 120, 130, 131 — and differ only
+in which clips their ANIMID slots point at. Most differ wholesale (rigs 9, 16, 98, 101,
+102, 110, 130 and 131 differ from rig 1 in *every* shared slot, so they are separate
+creatures wearing one skeleton). A few differ in almost nothing, and when they do, it is
+the death:
 
-| skeleton | bones | clips | what it looks like |
+| rig | shares bones with | slots differing | what changes |
+|---|---|---:|---|
+| 111 | 1 | **1** of 241 | slot 55 — rises into the air instead of falling |
+| 112 | 1 | **1** of 241 | slot 55 — a second, ordinary fall |
+| 61 | **50** (which *is* bound) | **1** of 103 | slot 55 — stays upright rather than going flat |
+| 120 | 1 | 8 of 247 | a bound rig, listed for contrast |
+
+So `61` is the same trick as `111`/`112` against a different body, and worth knowing about
+if you want an alternate death without a new rig.
+
+The remaining thirteen have geometry of their own:
+
+| rig | bones | own clips | body |
 |---|---:|---:|---|
-| 111, 112 | 43 | 231 each | skeleton 1 with **one clip changed** — see below |
-| 122 | 129 | 8 | **eight arms, four legs, mandibles** — see below |
-| 3 | 27 | 7 | quadruped/serpent — `BODY1..3`, `JAW` |
-| 42, 61, 63 | 23–49 | 1–18 | tailed bodies (`TAIL01..04`) |
-| 57 | 4 | 1 | `ROOT`, `LWING`, `RWING`, `LOWERBACK` — a bird reduced to nothing |
-| 46 | 33 | 11 | winged humanoid |
-| 2, 26, 28, 31, 33, 40, 114 | 25–42 | 5–16 | humanoid variants |
+| 3 | 27 | 7 | four legs, an **eight-segment neck** (`NECK1..8`) and a jaw — a long-necked beast |
+| 42 | 23 | 8 | **no legs**: spine, two arms, jaw and a three-segment tail — serpentine |
+| 46 | 33 | 11 | winged biped, three-segment wings, tail; 3.13 m across at rest |
+| 40 | 35 | 7 | large biped with an extra hip segment, a three-part neck, a jaw and two `SPIKE` bones |
+| 2 | 44 | 11 | humanoid with toes (`LTOE`/`RTOE`) — the standard 43-bone rig plus feet detail |
+| 28 | 40 | 8 | humanoid with toes but simplified hands — no fingers or thumbs |
+| 114 | 39 | 7 | humanoid with a jaw |
+| 26 | 42 | **1** | a standard humanoid that borrows almost everything |
+| 31 | 33 | 7 | humanoid with **ears** (`EARJOINT`, `LEAR`, `REAR`); arms stop at the radius |
+| 33 | 25 | 5 | simplified biped — femur straight to foot, humerus straight to radius |
+| 63 | 11 | 1 | minimal critter: two femurs, two humeri, head, tail |
+| 57 | 4 | 1 | `ROOT`, `LWING`, `RWING`, `LOWERBACK` — a flier reduced to two wing bones |
+| 32 | 2 | 7 | `ROOT` and `LOWERBACK`. Two bones, seven clips of its own |
+
+Rig 32 is the oddity worth a second look: a two-bone rig with its own movement, idle, death
+and attack clips. Whatever it was, the client was prepared to animate it.
 
 ## motions/ and animations/ — the clips, and how to play one
 
