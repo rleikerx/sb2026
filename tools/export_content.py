@@ -54,6 +54,39 @@ def clean(text: Optional[str]) -> str:
     return "".join(ch for ch in (text or "") if ch.isprintable()).strip()
 
 
+def allowed(requirement, key: str, universe) -> Optional[List[str]]:
+    """
+    Who may use this, from a `{restrict, races|classes}` record.
+
+    **The `restrict` flag inverts the list, and reading the list without it gets the
+    answer exactly backwards.** Confirmed against the Morloch wiki by
+    `tools/check_disciplines_wiki.py`: honouring the flag takes discipline race agreement
+    from 41/171 to 171/171 and class agreement from 175/214 to 214/214.
+
+        restrict False, list        the list is who MAY take it        -> that list
+        restrict True,  list        the list is who may NOT             -> everyone else
+        restrict True,  empty       nothing excluded, so anyone may     -> None
+        restrict False, empty       an empty allow-list, so no one may  -> []
+
+    The third case is why this returns `None` rather than `[]` for unrestricted. The old
+    code emitted `[]` for it, which reads just as naturally as "nobody may" -- and it did
+    so on 3,177 of the 4,021 items. `None` says "no restriction" and cannot be confused
+    with an empty allow-list, which is the fourth case and genuinely does mean nobody:
+    three items carry it (Lightning Spear, Alchemist's Cowl, Alchemist's Robes).
+
+    The universe an exclusion is subtracted from is passed in rather than assumed, so a
+    different cache resolves against its own contents.
+    """
+    requirement = requirement or {}
+    listed = [x for x in (requirement.get(key) or []) if x]
+    if not requirement.get("restrict"):
+        return listed
+    if not listed:
+        return None
+    excluded = set(listed)
+    return [u for u in universe if u not in excluded]
+
+
 def attr_map(entries) -> Dict[str, int]:
     """[{attr_type, attr_value}] -> {stat: value}, ordered like the stat sheet."""
     out: Dict[str, int] = {}
@@ -142,8 +175,10 @@ def main() -> int:
             row = {
                 **common,
                 "rune_type": rune_type,
-                "eligible_races": list((fields.get("item_race_req") or {}).get("races") or []),
-                "required_classes": list((fields.get("item_class_req") or {}).get("classes") or []),
+                # Resolved below, once the loop has seen enough races and classes to
+                # know what "everyone else" means.
+                "_race_req": fields.get("item_race_req"),
+                "_class_req": fields.get("item_class_req"),
                 "level_req": fields.get("item_level_req"),
                 "pracs_per_level": fields.get("rune_pracs_per_level"),
                 "skill_grants": [
@@ -158,9 +193,25 @@ def main() -> int:
             }
             {"CLASS": classes, "DISCIPLINE": disciplines, "TALENT": talents}[rune_type].append(row)
 
-    # Cross-link: which classes each race may take.
+    # The universes an exclusion list is subtracted from. Both are read from what this
+    # run actually found rather than hardcoded, so a different cache resolves against its
+    # own contents: the 12 races flagged for character creation, and the player classes,
+    # which excludes `Pet` because it is a rune type rather than something anyone rolls.
+    playable_races = [r for r, v in races.items() if v.get("standard_creation")]
+    player_classes = [c["name"] for c in classes if c["name"] != "Pet"]
+    for row in classes + disciplines + talents:
+        row["eligible_races"] = allowed(row.pop("_race_req"), "races", playable_races)
+        row["required_classes"] = allowed(row.pop("_class_req"), "classes", player_classes)
+
+    # Cross-link: which classes each race may take. `None` means unrestricted, which is
+    # every race rather than none -- the distinction this back-fill would otherwise drop.
     for row in classes:
-        for race_name in row["eligible_races"]:
+        # `Pet` is a rune type rather than something anyone rolls, and it is unrestricted,
+        # so without this it lands in every race's class list.
+        if row["name"] == "Pet":
+            continue
+        for race_name in (row["eligible_races"] if row["eligible_races"] is not None
+                          else list(races)):
             if race_name in races:
                 races[race_name]["classes"].append(row["name"])
 
@@ -203,8 +254,9 @@ def main() -> int:
             "level_req": f.get("item_level_req"),
             "rank_req": f.get("item_rank_req"),
             "skill_used": f.get("item_skill_used"),
-            "eligible_races": list((f.get("item_race_req") or {}).get("races") or []),
-            "eligible_classes": list((f.get("item_class_req") or {}).get("classes") or []),
+            "eligible_races": allowed(f.get("item_race_req"), "races", playable_races),
+            "eligible_classes": allowed(f.get("item_class_req"), "classes",
+                                        player_classes),
             "flags": list(f.get("item_flags") or []),
         })
 
