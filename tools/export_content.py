@@ -228,13 +228,40 @@ def main() -> int:
             })
         structures.append({
             "asset_id": asset_id,
+            # Two different record types share this table, and every row is missing the
+            # other one's columns. 294 are buildable *templates*: they carry the
+            # `template_*` fields and the rank ladder, and no `obj_name` at all. The other
+            # 768 are the *structures* those ranks build: named, with health, floors and
+            # doors, and no ranks. The two sets are disjoint -- no row has both -- so a
+            # reader filtering on `ranks` or on `name` silently gets one half.
+            "kind": "template" if ranks else "structure",
             "name": clean(f.get("obj_name")),
             "icon_texture_id": f.get("obj_icon") or None,
+            # `combat_health_full` reads 0.0 on all 768 structures that carry it and is
+            # absent on the 294 templates, so this column is empty in this build. Kept
+            # rather than dropped: "the field exists and is zero" is a different statement
+            # from "the field was not read", and the per-rank `health` below is the real one.
             "health": f.get("combat_health_full"),
             "template_id": getattr(cobj, "template_id", None),
             "render_ids": list(getattr(cobj, "render_ids", []) or []),
             "ranks": ranks,
         })
+
+    # A template has no name of its own, which left 294 rows shipping `name: ""` and no way
+    # to tell a Tree of Life from an Orc Slave Pen. Its identity is in the buildings its
+    # ranks put down: 285 of the 294 reference exactly one named structure, and the 9 that
+    # reference several are progressions -- 2000000 runs Tree of Life, then Belligerent
+    # Palace, then Feudal Palace, which is a city tree upgrading and worth seeing in order.
+    by_id = {s["asset_id"]: s["name"] for s in structures if s["name"]}
+    for entry in structures:
+        names: List[str] = []
+        for rank in entry["ranks"]:
+            for building in rank["buildings"]:
+                found = by_id.get(building)
+                if found and found not in names:
+                    names.append(found)
+        if names:
+            entry["building_names"] = names
 
     tables = {
         "races.json": sorted(races.values(), key=lambda r: r["race"]),

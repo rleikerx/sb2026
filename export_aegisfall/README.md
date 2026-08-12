@@ -320,7 +320,7 @@ convenience."* This is that same mechanical data read out of the shipped client.
 | `disciplines.json` | 48 | requirements and grants |
 | `talents.json` | 240 | requirements and grants |
 | `items.json` | 4,021 | equip slot, weight, value, **damage**, weapon speed and range, level/rank requirements, race/class restrictions |
-| `structures.json` | 1,062 | rank progression, health per rank, building per rank |
+| `structures.json` | 1,062 | **two record types**: 294 buildable templates with a rank ladder, 768 named structures. See below |
 | `powers.json` | 1,465 | cost, target, area, cast time, prerequisites, the ACTION chain, and every message string |
 | `effects.json` | 2,950 | what a power *does*: mods, conditions, animation overrides, and who applies it |
 | `rules.json` | — | movement speeds, recovery rates, the 305 scaling curves, 84 mod types, 94 skills |
@@ -334,6 +334,37 @@ worth understanding before overwriting anything.
 
 `items.json` carries equip slots, which is the field that lines up with the
 `EquipSlot` values `@aegisfall/sim` already stores per character.
+
+### structures.json is two tables, and the templates had no names
+
+**Re-take `structures.json` too.** It holds two disjoint record types and every row was
+missing the other one's columns:
+
+- **294 templates** — the buildable city assets. They carry the `template_*` fields and the
+  rank ladder (rank, health, hirelings, buildings) and have **no name at all**.
+- **768 structures** — the things those ranks put down. Named, with floors, doors and
+  health, and no ranks.
+
+No row has both, so a reader filtering on `ranks` or on `name` silently gets one half of the
+file. Every row now carries `kind`, either `"template"` or `"structure"`.
+
+The templates shipped `name: ""` — 294 rows with no way to tell a Tree of Life from an Orc
+Slave Pen. Their identity is in the buildings their ranks put down, and **all 294 now
+resolve**: 285 reference exactly one named structure, and the nine that reference several
+are progressions worth seeing in order — template 2000000 runs *Tree of Life → Belligerent
+Palace → Feudal Palace → Mercantile Palace*, which is a city tree upgrading. The names are
+in a new `building_names`, in rank order.
+
+`health` at the top level stays empty and that is honest: `combat_health_full` reads 0.0 on
+all 768 structures that carry it and is absent on the templates. The per-rank `health` is
+the real one and always was.
+
+**The wiki cannot check this.** Of the 250 distinct buildable structure names, **7** exist
+as wiki pages, and most of those are lore or mechanics articles. Exactly one — *Tree of
+Life* — carries a rank table, and its health ladder (80,000 → 500,000) does not match ours
+(3,000 → 25,000 on the template that builds it). With a single comparable page there is no
+way to tell patch drift from a mis-join, so it is recorded as unresolved rather than
+counted either way.
 
 ### items.json shipped an empty damage column, and the wiki is how it was found
 
@@ -349,6 +380,13 @@ also being dropped.
 Nothing internal could have caught this. An always-null column is perfectly self-consistent,
 passes every completeness check, and reads as "this cache does not record damage". It took
 an outside source quoting `8 - 34` for a weapon this export had nothing for.
+
+Once the failure mode was known it was worth sweeping for: every column of every
+`content/` table was checked for being empty on every row. Six more turned up, and **all six
+are genuine zeros** — `item_rank_req`, `item_level_req`, `rune_creation_cost` on classes and
+disciplines, `rune_pracs_per_level` on disciplines and talents. The keys exist on the
+records and the values are zero in this build, which is a different statement from the
+`damage` case and is why they are left alone. `damage` was the only wrong key.
 
 `python tools/check_items_wiki.py` is that comparison, over the 264 pages in the wiki's
 `Category:Weapons`, 229 of which name an item we have:
