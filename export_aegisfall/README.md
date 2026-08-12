@@ -754,8 +754,32 @@ The remaining thirteen have geometry of their own:
 | 57 | 4 | 1 | `ROOT`, `LWING`, `RWING`, `LOWERBACK` — a flier reduced to two wing bones |
 | 32 | 2 | 7 | `ROOT` and `LOWERBACK`. Two bones, seven clips of its own |
 
-Rig 32 is the oddity worth a second look: a two-bone rig with its own movement, idle, death
-and attack clips. Whatever it was, the client was prepared to animate it.
+#### Rig 32: two bones, 53 slots, and it dies belly-up
+
+Worth a section because it is the smallest animated thing in the cache and it is fully
+animated. `ROOT` plus one `LOWERBACK` running **13.9 cm** straight forward (`+Z`), and that
+is the entire skeleton. It fills 53 ANIMID slots from seven clips of its own — movement,
+idle, death, attack, the lot.
+
+**`LOWERBACK` never rotates in any of them.** Every frame of every clip animates `ROOT`
+alone, so the body is one rigid piece and the animation is the object's own motion through
+space:
+
+| clip | frames | what it does |
+|---|---:|---|
+| move | 16 | weaves side to side, ±0.11 units across while advancing, yaw swinging ±15° |
+| idle | 17 | no translation; yaw drifts ±5° |
+| attack | 7 | darts forward 1.73 units and back 0.98, pitching down 21° |
+| death | 16 | **rolls 180° onto its back** |
+
+The death is the tell, and it is measured rather than inferred: the body's up axis travels
+from `(0, +1, 0)` to `(0, −1, 0)` while its forward axis stays on `+Z` the whole way, so it
+rolls about its own long axis and settles inverted, wobbling between 177° and 179°. A
+14 cm rigid body that weaves as it moves, darts to strike, and turns belly-up when killed.
+
+What it was for is not established. The obvious candidates are all accounted for elsewhere:
+beetles are on rig 36, crabs 60, rats 21 and 22, snakes and vipers 82, spiders 27, bats 8,
+12 and 55. The only `Fish` in the catalogue is an item with no skeleton at all.
 
 ## motions/ and animations/ — the clips, and how to play one
 
