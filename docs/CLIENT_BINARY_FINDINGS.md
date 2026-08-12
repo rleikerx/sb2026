@@ -259,9 +259,29 @@ its own forward-kinematics loop and needed the same conjugation; it now carries 
 back through `pose()`, so it authors through `ArcBoneRecord.clip_rotation` to land in the
 frame `pose` will read them in. Any new consumer has the same obligation.
 
-**Left open.** `_fold_wings` still overrides rigs 18/20/70/117 with a synthetic fold, and
-for rig 18 the clip now supplies a real one. It is no longer obviously needed there. That
-only affects the `stand_pose` / `wing_fold_pose` export path, not the clip renders.
+**Resolved since.** `_fold_wings` used to override rigs 18/20/70/117 with a synthetic fold
+on the stated grounds that no frame in the cache supplies an unfolded wing. That was
+measured against the pose math of the time, which splayed every clip's wings whatever the
+clip said. It now measures both and takes the better per rig, on how far the lowest wing
+tip sits above the body's lowest point in body heights:
+
+| | the cache's own | written here |
+|---|---:|---:|
+| Aracoix (18) | **0.280** | 0.663 |
+| Aracoix (20) | **0.196** | 0.640 |
+| Griffon (70) | 0.579 | **0.427** |
+| Nelchael (117) | 0.963 | **0.778** |
+
+so both Aracoix now wear the client's wings and the other two keep ours. `stand_layer`
+reports `+wingclip` against `+wingfold` to say which, because the point of printing either
+is to mark where this exporter invented data.
+
+Checked by picture, not by the number: the bone-tip metric that chose this says the fold
+improved, and on the Skeletal Aracoix mesh it also moves the bounding box *wider* (1.64 ->
+3.56) while collapsing its depth (6.02 -> 2.17). Drawn, that is the difference between a
+six-unit horizontal plank behind the creature and a wing folded down its back to knee
+height. The original rationale warned that wing-tip figures do not show what a picture
+shows, and it was right both times.
 
 ## 7) Reproducing this
 

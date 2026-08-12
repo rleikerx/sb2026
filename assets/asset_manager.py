@@ -117,6 +117,19 @@ STAND_BIPED_LEG_RATIO = 1.0
 # is not a fix: the Griffon's best graft still reads 0.553, and drawn, it is a
 # wing held up rather than folded.
 #
+# **That is still true of the Griffon and no longer true of the Aracoix.** All of
+# it was measured against pose math that ignored the ASF joint frame, which left
+# every clip's wings splayed whatever the clip said. With the frame applied
+# (11 Aug 2026) the Aracoix idle folds its own wings down its back, and lower
+# than the rotations below put them. So `_fold_wings` now measures both and takes
+# the better, per rig, and the layer says which won -- `+wingfold` for the ones
+# this exporter authored, `+wingclip` for the ones it read. Today that is
+# Griffon and Nelchael authored, both Aracoix read. The list below stays as the
+# set of rigs whose wings are *considered*, not the set that gets invented data.
+#
+# Anyone re-deriving this: the premise above is a measurement, and measurements
+# taken through a broken transform expire when it is fixed.
+#
 # What a folded wing is here: every wing bone laid along one direction. That is
 # what the source's own closed-wing frames do -- the Griffon's clips rotate
 # WING03/04/05 about X until all three point the same way -- so the shape is the
@@ -659,10 +672,14 @@ class AssetManager:
         # question. It gains a suffix so that every picture and every report
         # says out loud which rigs carry rotations this exporter wrote.
         layer = (layer + rung) if best else 'rest'
-        best, folded = self._fold_wings(skeleton_id, skeleton, best)
+        best, wing_source = self._fold_wings(skeleton_id, skeleton, best)
 
+        # `+wingfold` still means *this exporter wrote these rotations*, which is the
+        # distinction the block above WING_FOLD_SKELETONS exists to preserve. `+wingclip`
+        # is the new case and the opposite one: the wings came out of a clip, so the whole
+        # pose is the cache's and nothing here was invented.
         self._stand_poses[skeleton_id] = best
-        self._stand_layers[skeleton_id] = layer + ('+wingfold' if folded else '')
+        self._stand_layers[skeleton_id] = layer + (('+' + wing_source) if wing_source else '')
         return best
 
     def wing_fold_pose(self, skeleton_id: int) -> Dict[str, tuple]:
@@ -683,8 +700,8 @@ class AssetManager:
         skeleton = self.load_skeleton(skeleton_id)
         if skeleton is None:
             return {}
-        folded, did = self._fold_wings(skeleton_id, skeleton, {})
-        return folded if did else {}
+        folded, wing_source = self._fold_wings(skeleton_id, skeleton, {})
+        return folded if wing_source else {}
 
     def _fold_wings(self, skeleton_id, skeleton, rotations):
         """
@@ -705,13 +722,13 @@ class AssetManager:
         legs the stance ladder picked for it.
         """
         if skeleton is None or skeleton_id not in WING_FOLD_SKELETONS:
-            return rotations, False
+            return rotations, None
 
         bones = getattr(skeleton, 'bones', None) or []
         names = [(b.name or '').upper() for b in bones]
         roots = {i for i, name in enumerate(names) if name in WING_ROOT_BONES}
         if not roots:
-            return rotations, False
+            return rotations, None
 
         wing = set()
         for i in range(len(bones)):
@@ -764,7 +781,92 @@ class AssetManager:
             accumulated[i] = world
             folded += 1
 
-        return out, folded > 0
+        if not folded:
+            return rotations, None
+
+        # Prefer the cache's own wings when it has better ones.
+        #
+        # The paragraph above `WING_FOLD_SKELETONS` says no frame selection can supply a
+        # folded wing. That was measured, and it was true -- of the pose math of the time,
+        # which ignored the ASF joint frame and left every clip's wings splayed. With the
+        # frame applied the Aracoix idle folds its own wings down its back, lower than the
+        # rotations here do, so for those two rigs this is no longer the only source and
+        # should not be the preferred one.
+        #
+        # Measured as "how far the lowest wing tip sits above the body's lowest point, in
+        # body heights", lower being more folded:
+        #
+        #                     authored by the cache   written here
+        #     Aracoix   (18)          0.280              0.663
+        #     Aracoix   (20)          0.196              0.640
+        #     Griffon   (70)          0.579              0.427
+        #     Nelchael (117)          0.963              0.778
+        #
+        # so the split is per rig and is decided by measuring both, not by a list. The
+        # Griffon and Nelchael still want the written fold, exactly as the original
+        # rationale found; the Aracoix no longer does.
+        wing_names = {names[i] for i in wing if names[i]}
+        grafted = self._wing_frame_from_clips(skeleton, rotations, wing_names)
+        if grafted is not None:
+            here = self._wing_drop(skeleton, out, wing_names)
+            theirs = self._wing_drop(skeleton, grafted, wing_names)
+            if here is not None and theirs is not None and theirs < here:
+                return grafted, 'wingclip'
+
+        return out, 'wingfold'
+
+    @staticmethod
+    def _wing_drop(skeleton, rotations, wing_names):
+        """
+        Lowest wing tip above the body's lowest point, in body heights. Lower is folded.
+
+        Normalised by the body's own height so one threshold reads the same on a Griffon
+        and an Aracoix, and measured against the *body* rather than the origin so a clip
+        that crouches does not flatter its own wings.
+        """
+        segments = skeleton.posed_segments(rotations)
+        tips = [segments[n][1] for n in wing_names if n in segments]
+        body = [entry[1] for name, entry in segments.items() if name not in wing_names]
+        if not tips or not body:
+            return None
+        lows = [p[1] for p in body]
+        stature = max(lows) - min(lows)
+        if stature < 1e-6:
+            return None
+        return (min(p[1] for p in tips) - min(lows)) / stature
+
+    def _wing_frame_from_clips(self, skeleton, rotations, wing_names):
+        """
+        `rotations` with the wing subtree replaced by the most folded one the cache holds.
+
+        Only the wing bones are taken, so the body keeps the stance the ladder chose --
+        the two questions are separate and the frame that folds the wings best is rarely
+        the frame that stands the body best.
+
+        Frames are sampled the same way `_calmest_frame` samples them, and only frames
+        that pass the upright test are eligible: the lowest wings in the cache belong to
+        a dive, where the whole creature is pointed at the ground.
+        """
+        best = best_drop = None
+        for token in sorted(set(getattr(skeleton, 'motion_tokens', None) or [])):
+            motion = self.load_motion(token)
+            data = getattr(motion, 'frames', None) if motion else None
+            if not data:
+                continue
+            total = max(1, data.get('frame_count') or 1)
+            step = max(1, total // STAND_FRAME_SAMPLES)
+            for frame in range(0, total, step):
+                candidate = self.load_motion_pose(token, frame)
+                if not candidate or not self._stands_upright(skeleton, candidate):
+                    continue
+                merged = dict(rotations)
+                for name in wing_names:
+                    if name in candidate:
+                        merged[name] = candidate[name]
+                drop = self._wing_drop(skeleton, merged, wing_names)
+                if drop is not None and (best_drop is None or drop < best_drop):
+                    best, best_drop = merged, drop
+        return best
 
     def stand_layer(self, skeleton_id: int) -> str:
         """
@@ -781,6 +883,12 @@ class AssetManager:
         exporter *authored* rather than read out of a clip. A Griffon is the
         only sort of asset here whose pose is not wholly the cache's, and every
         picture and report that prints a layer says so.
+
+        `+wingclip` is the opposite and is the good case: the rig was considered
+        for a fold, the cache turned out to hold better wings than this exporter
+        would have written, and they were taken instead. Nothing is invented on
+        such a rig — the whole pose is the client's. Both Aracoix read this way
+        since the joint frame landed; the Griffon and Nelchael still do not.
 
         Reported by the code that made the choice rather than reconstructed by
         the caller. A reporting tool that re-ran the gates itself would be a
