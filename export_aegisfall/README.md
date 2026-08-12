@@ -35,6 +35,8 @@ some numbers you may already have baked are wrong rather than merely stale.
 | `models/` (creature) | re-baked on the fixed pose |
 | `graph/` | re-baked on the fixed pose |
 | `reference/` | **`unitsPerMetre` 2.7411 → 2.5994** — see below |
+| `content/items.json` | `damage` was empty on all 4,021 rows; race/class restrictions were **inverted** on 675 |
+| `content/disciplines.json`, `talents.json` | race/class requirements were **inverted** — see below |
 
 ### Take these — they are new
 
@@ -49,7 +51,7 @@ some numbers you may already have baked are wrong rather than merely stale.
 ### Leave these — they did not move
 
 `models/` non-creature (the 1.2 GB of structures, props, items, deeds), `models_rigged/`,
-`rig/`, `zones/`, `content/` races/classes/items/structures, `icons/`, `sounds/`, `terrain/`,
+`rig/`, `zones/`, `content/` races/classes/structures, `icons/`, `sounds/`, `terrain/`,
 `effects/`, `config/`, `cameos/`, `maps/` (the three world images).
 
 **Only creatures carry a skeleton** — zero structures, props, items or deeds do, checked
@@ -334,9 +336,11 @@ worth understanding before overwriting anything.
 
 ### races.json agrees with the wiki on every number
 
-`python tools/check_races_wiki.py`. The only one of the four wiki comparisons that found
-nothing wrong, which is a result rather than the absence of one — the other two that could
-be run turned up a misnamed field and a column empty on all 4,021 rows.
+`python tools/check_races_wiki.py`. One of two comparisons out of the five that found
+nothing wrong; the other three turned up a misnamed field, a column empty on all 4,021
+rows, and requirement lists that were inverted. Read this one as evidence about races
+specifically rather than about `content/` generally — it passes on the pre-restrict-fix
+export too, as the section on requirements below explains.
 
 | | |
 |---|---|
@@ -451,6 +455,46 @@ precisely what this reported before the fix.
 
 One decoding note for anyone reading the raw records: attribute deltas are
 stored unsigned, so −10 arrives as `4294967286`. The exporter converts these.
+
+### Race and class requirements were inverted, and `[]` did not mean what it looked like
+
+**Re-take `items.json`, `disciplines.json` and `talents.json`.** The requirement records in
+the cache are `{restrict, races}` / `{restrict, classes}`, and the earlier export read the
+list while ignoring the flag beside it. The flag *inverts* the list:
+
+| stored | meaning | this export now emits |
+|---|---|---|
+| `restrict: false`, list | the list is who **may** | that list |
+| `restrict: true`, list | the list is who **may not** — everyone else may | everyone else, resolved |
+| `restrict: true`, empty | nothing excluded, so **anyone** may | `null` |
+| `restrict: false`, empty | an empty allow-list, so **no one** may | `[]` |
+
+Two consequences for anything already consuming these files:
+
+**The lists were backwards.** Not incomplete — reversed. 619 items had their race list
+inverted and 56 their class list, along with most disciplines. A discipline restricted
+*away from* three races was published as available to *only* those three.
+
+**`null` and `[]` are now different, and the old files only had `[]`.** Unrestricted is
+`null`; an empty allow-list is `[]` and genuinely means nobody. The old export emitted `[]`
+for both, on 3,177 of 4,021 items — so a consumer reading `[]` as "no race may equip this"
+was locking players out of most of the item table, and one reading it as "no restriction"
+was right by accident 3,177 times and wrong 3 times. Treat `null` as "no restriction" and
+`[]` as "nobody"; only three items carry the latter (Lightning Spear, Alchemist's Cowl,
+Alchemist's Robes).
+
+The universe an exclusion resolves against is this export's own contents — the 12 races
+flagged `standard_creation`, and the classes excluding `Pet`.
+
+`python tools/check_disciplines_wiki.py` is the comparison that found it. Honouring the
+flag takes discipline race agreement from **41/171 to 171/171** and class agreement from
+**175/214 to 214/214**; every requirement on all 48 discipline pages now agrees.
+
+Worth knowing if you are relying on the other checks: `check_races_wiki.py` and
+`check_classes_wiki.py` score identically — and perfectly — on both the broken export and
+the fixed one. 26 of the 27 class runes store `restrict: false`, where the naive read and
+the correct read happen to agree, so **two perfect scores were being reported over a field
+that was backwards on 675 rows**. Passing checks constrain only what they cover.
 
 ### powers.json / effects.json — the part the wiki has least of
 
