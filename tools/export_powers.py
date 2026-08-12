@@ -339,6 +339,92 @@ def read_actions(path: Path, effect_ids: set) -> Dict[str, Any]:
     return out
 
 
+def read_enchantments(path: Path, actions: Dict[str, Any],
+                      effects: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    `PowActionCostInfo.cfg` -> the reagent cost of every item prefix and suffix.
+
+    524 lines of `PRE-003 "Iron" 2 "Sulfur" 1   # "Uncommon"`, and every id resolves: all
+    524 are power actions, and all 17 reagents are rows in `items.json`. This is the
+    crafting side of the same chain `rules.json` opened for combat -- with it, what an
+    enchantment costs and what it does are both computable from the cache.
+
+    The chain runs cost -> action -> effects -> mods, and the effects are where the
+    meaning is. `PRE-003` applies `PRE-003A` and `PRE-003B`, whose mods are
+    `ItemName "Uncommon"`, `Value 362.5`, `ArmorPiercing 2` and `OCV 25`. Two things fall
+    out of that:
+
+      * the display name is in the data twice -- as the `#` comment here and as the
+        `ItemName` mod on the effect -- so `nameFromEffect` records the second and
+        disagreements are visible rather than assumed away;
+      * **it explains the `ITEM-A` / `ITEM-B` placeholder names.** Those are 1,132 of the
+        2,950 effects and the largest group of the 194 that carry a token where a display
+        name belongs. They are not junk: they are the two halves of an item enchantment,
+        A carrying the name, value and primary mod, B the secondary.
+
+    638 prefix/suffix actions exist and 524 carry a cost here. The other 114 are exported
+    with `cost: null` rather than an empty list, which would read as "free".
+    """
+    rows: List[Dict[str, Any]] = []
+    if not path.exists():
+        return rows
+    for line in path.read_text(encoding="latin-1", errors="ignore").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        body, _, comment = stripped.partition("#")
+        head = body.split(None, 1)
+        if not head:
+            continue
+        action_id = head[0]
+        cost = [{"resource": name, "quantity": int(qty)}
+                for name, qty in re.findall(r'"([^"]*)"\s+(\d+)',
+                                            head[1] if len(head) > 1 else "")]
+        named = re.search(r'"([^"]*)"', comment)
+        entry = actions.get(action_id) or {}
+        effect_ids = list(entry.get("effects") or [])
+
+        name_from_effect = None
+        value = None
+        mods: List[Dict[str, Any]] = []
+        for effect_id in effect_ids:
+            for mod in (effects.get(effect_id) or {}).get("mods") or []:
+                if mod["name"] == "ItemName":
+                    parts = [str(a) for a in mod.get("args") or [] if a]
+                    if parts and name_from_effect is None:
+                        name_from_effect = parts[0]
+                elif mod["name"] == "Value":
+                    args = mod.get("args") or []
+                    if args and value is None:
+                        value = args[0]
+                else:
+                    mods.append({"effect": effect_id, "name": mod["name"],
+                                 "args": mod.get("args") or []})
+
+        # `read_actions` only records an effect id it can resolve, so an action naming one
+        # that Effects.cfg does not define comes out with an empty list and reads as "does
+        # nothing". Three do: PRE-335/336/337 each name a `<id>A` that is not in the file.
+        # That is a dangling reference in the shipped data, and saying so beats silence.
+        missing = [a for a in (entry.get("args") or [])
+                   if isinstance(a, str) and a not in effects and a not in effect_ids]
+
+        row = {
+            "action": action_id,
+            "kind": ("prefix" if action_id.startswith("PRE-")
+                     else "suffix" if action_id.startswith("SUF-") else None),
+            "name": named.group(1) if named else None,
+            "nameFromEffect": name_from_effect,
+            "cost": cost or None,
+            "value": value,
+            "effects": effect_ids,
+            "mods": mods,
+        }
+        if missing:
+            row["missingEffects"] = missing
+        rows.append(row)
+    return rows
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -472,6 +558,26 @@ def main() -> int:
         "count": len(effects),
         "effects": effects,
     }, indent=1), encoding="utf-8")
+
+    enchantments = read_enchantments(config / "PowActionCostInfo.cfg", actions, effects)
+    if enchantments:
+        priced = [e for e in enchantments if e["cost"]]
+        (out / "enchantments.json").write_text(json.dumps({
+            "generator": "tools/export_powers.py",
+            "note": ("PowActionCostInfo.cfg: the reagent cost of every item prefix and "
+                     "suffix. `action` joins powers.json's `actions`, every `resource` is "
+                     "a row in items.json, and `mods` is what the enchantment actually "
+                     "does with ItemName and Value lifted out. `name` is the config's own "
+                     "comment and `nameFromEffect` the same string as the effect records "
+                     "it -- both are kept so a disagreement stays visible."),
+            "count": len(enchantments),
+            "enchantments": enchantments,
+        }, indent=1), encoding="utf-8")
+        print("enchantments " + str(len(enchantments)) + " ("
+              + str(sum(1 for e in enchantments if e["kind"] == "prefix")) + " prefix, "
+              + str(sum(1 for e in enchantments if e["kind"] == "suffix")) + " suffix); "
+              + str(len(priced)) + " priced, "
+              + str(sum(1 for e in enchantments if e["effects"])) + " reaching an effect")
 
     print("powers " + str(len(powers)) + "  effects " + str(len(effects))
           + "  power actions " + str(len(actions)))
