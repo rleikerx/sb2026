@@ -40,6 +40,8 @@ some numbers you may already have baked are wrong rather than merely stale.
 | `content/powers.json` | gains an `actions` table, without which 19 rune effects are unreachable |
 | `content/deeds.json` | **new** — 880 deeds with the builder's price, an asset kind nothing read |
 | `content/items.json` | ten more columns — **armour had no defense rating**, and 1,030 items no sex restriction |
+| `content/character_creation.json` | **new** — what the creation screen actually offers, incl. two dev runes it does not |
+| `zones/macrozones.json` | **new** — 135 zones with continent and level band; zone→continent was never open |
 
 ### Take these — they are new
 
@@ -326,6 +328,7 @@ convenience."* This is that same mechanical data read out of the shipped client.
 | `talents.json` | 240 | requirements and grants, **which are player-selectable**, rune category, attribute floors, applied effects |
 | `items.json` | 4,021 | equip slot, weight, value, **damage**, **defense rating**, durability, bulk, weapon speed and range, skill/level/rank requirements, race/class/discipline/**sex** restrictions, resistances, female mesh |
 | `deeds.json` | 880 | **new** — the builder's price, what each deed places, start rank, employment |
+| `character_creation.json` | 132 | **new** — the client's own creation lists: 22 race runes with sex, 4 classes, 22 promotions, 84 traits |
 | `structures.json` | 1,062 | **two record types**: 294 buildable templates with a rank ladder, architecture, city radii and NPC slots; 768 named structures with floors, levels and doors. See below |
 | `powers.json` | 1,465 | cost, target, area, cast time, prerequisites, the ACTION chain, and every message string |
 | `effects.json` | 2,950 | what a power *does*: mods, conditions, animation overrides, and who applies it |
@@ -577,6 +580,34 @@ and the rest differs with *no single scale factor* — the wiki-to-cache ratio i
 often than anything else and the remainder is scattered. That is patch drift, the wiki
 documenting a different build. A genuinely wrong field agrees ~0% of the time, which is
 precisely what this reported before the fix.
+
+### character_creation.json — what the creation screen actually offers
+
+**New.** `Config/CharCreateRuneList.cfg` is the client's own list of what character
+creation shows, by section, and it is a **stricter and better statement than the
+`standard_creation` flag** on the rune itself.
+
+| section | entries |
+|---|---:|
+| `racerunes` | 22, each tagged `MALE` or `FEMALE` |
+| `classrunes` | 4 — Fighter, Healer, Rogue, Mage |
+| `promotionrunes` | 22 |
+| `attrrunes` | 84 — the traits |
+
+All 84 trait runes are inside the 92 that `standard_creation` flags. **The eight it leaves
+out are the interesting ones**: `Wolfpack Developer` and `QA Test Rune` — which are exactly
+what they sound like, and were being offered to players by any consumer filtering on the
+flag — plus `Proficient with Bows`, and **the higher id of all five duplicated talent
+names**.
+
+That last part settles something. `Proficient with Axes` exists twice, 250080 and 250123,
+with different data. This file offers 250080 and never 250123 — the same row the Morloch
+wiki describes, reached independently. Two unrelated sources agreeing on which of a
+duplicate pair is real is a better answer than either alone.
+
+**If you are building a creation screen, drive it from this file, not from
+`standard_creation`.** Three race variants are likewise flagged but not offered
+(Half-Giant 2019, Human 253000/253001, all male body variants).
 
 ### The armour had no armour — ten more item columns
 
@@ -1376,12 +1407,51 @@ Blowfish's usual 56, so a stock library will refuse keys this client would accep
   `.tga` or `.png`. The guess that decryption would yield the power→cameo mapping was wrong; the
   wiki is the only source for that, and always was.
 - **`ZoneDataENGLISH.cfg` carries no coordinates.** It is `<ZONENAME>`, `<ZONELORE>`, `<MINLEVEL>`,
-  `<MAXLEVEL>` — 55 zones for Aerynth, 54 for Dalgoth, 38 for Vorringia. Authoritative level bands
-  and lore straight from the client, but **it does not place a zone on a continent**, so the
-  zone-to-continent question is still open.
+  `<MAXLEVEL>` — authoritative level bands and lore straight from the client.
 
-What it *is* worth: 1,465 powers against the 460 the wiki lists, and 147 zones with client-authored
-level bands to check the wiki-derived gazetteer against.
+**Correction — this section said the zone-to-continent question was still open, and it is
+not.** The claim was that `ZoneDataENGLISH.cfg` "does not place a zone on a continent."
+The file does not, but **there are three of them**, in `AerynthIcons/`, `DalgothIcons/`
+and `VorringiaIcons/`, and the containing directory is the answer. 129 of the 135 distinct
+zone names appear under exactly one continent; the six under all three are the
+battlegrounds and Chaos zones — `Pandemonium`, `Bone Marches`, `Plain of Ashes`,
+`Aeran Belendor`, `Western Battleground`, `Southern Battleground` — which genuinely exist
+on every world.
+
+`zones/macrozones.json` is new and carries it: name, `continents` (a list, for those six),
+`minLevel`, `maxLevel`, and the CZone `zoneIds` of that name.
+
+**Only 25 of the 135 match a zone record in this cache.** The rest are Dalgoth and
+Vorringia zones whose records are not in this Aerynth cache at all — their names have no
+near miss among the 729 named zones here, so that is a real absence, not a naming
+mismatch. All 25 that do match are `zoneType` 1 and none is type 0; worth recording, but
+`zoneType` is documented as the zone's *shape*, so read that as "the map screen names
+rectangular zones" rather than as a hierarchy.
+
+What the archives are *also* worth: 1,465 powers against the 460 the wiki lists, and 135
+zones with client-authored level bands to check the wiki-derived gazetteer against.
+
+### The rest of the config sweep
+
+147 distinct `.cfg` files ship (203 counting the 57 per-server copies of
+`Guild_Restrictions`). Seven are read by this export. Of the remainder, the great majority
+is client presentation with no mechanical content — 40 `SCREEN_*.cfg`, 34 `Transitions/`,
+17 `Environment/` weather definitions, the sound tables, credits, profanity list and
+tooltips.
+
+**Four hold mechanics and are not exported yet.** Catalogued here so the next pass does not
+have to find them again:
+
+| file | bytes | what it holds |
+|---|---:|---|
+| `PowActionCostInfo.cfg` | 47,675 | **reagent cost per power action** — `PRE-003 "Iron" 2 "Sulfur" 1 # "Uncommon"`. The crafting/enchant cost table |
+| `StartingKitTable.cfg` | 20,092 | what a new character is given |
+| `Ranks_*.cfg` | ~20 files | guild rank titles per charter type |
+| `GuildGovConfig.cfg`, `GuildServerConfig.cfg`, `Guild_Restrictions.*` | ~11 KB | guild government rules and per-server restrictions |
+
+`RaceClassDiscTalents.cfg` is a UID-to-English name table for the race, class, discipline
+and talent vocabularies — useful for resolving tokens, and the race list in it includes the
+non-playable ones (`Animal`, `Construct`, `Undead`, `Siege`).
 
 ## cameos/ — the power icons, and the only bundle not from the cache
 
