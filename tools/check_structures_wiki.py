@@ -88,15 +88,20 @@ field this check was not reading. Fixing that required widening the wall family 
 towers -- which is what the wiki's section describes anyway, since it garrisons the set
 with a `Tower Artillery Captain` and prices it as one 50k system.
 
-**That widening is also why the architecture column went from 43/44 to 44/44, and the
-underlying oddity it was flagging has not changed.** Templates 2000192/3/4, which build the
-Irekei gate, stair and straight-wall pieces, still carry `architecture: ["Feudal"]` where
-the Elven (2000209/11/12) and Invorri (2000227/8/9) equivalents carry their own style. What
-changed is that the Irekei *towers*, 2000195 and 2000196, are tagged `Irekei` and are now
-inside the family, so the section as a whole is available to Irekei and the wiki is not
-contradicted. The narrower fact stands and is worth knowing if you group buildings by this
-field: three Irekei wall pieces will sort under Feudal. Nothing in the export was altered
-to produce the agreement.
+**That widening is also why the architecture column went from 43/44 to 44/44.** The Irekei
+*towers*, 2000195 and 2000196, are tagged `Irekei` and are now inside the family, so the
+section as a whole is available to Irekei and the wiki is not contradicted.
+
+Separately, and by explicit request, `export_content.py` now **overrides** the architecture
+on templates 2000192/3/4 -- the Irekei gate, stair and straight-wall pieces -- from
+`["Feudal"]` to `["Irekei"]`, keeping the original in `architecture_shipped`. It is the
+only place the export departs from the cache.
+
+**This comparison ignores that override.** `shipped_architecture()` reads
+`architecture_shipped` wherever it exists, so the 44/44 above describes the client's own
+data and not this repo's edit. Scoring a correction against the wiki that motivated it
+would turn an edit into evidence, and the run prints the overridden rows above the table so
+the departure is never invisible.
 
     python tools/check_structures_wiki.py
 """
@@ -206,6 +211,18 @@ def row_field(body: str, label: str) -> Optional[str]:
     """The `|'''Cost'''` / `|750k` two-cell rows these tables are built from."""
     found = re.search(r"'''%s'''\s*\n\|\s*([^\n|]*)" % re.escape(label), body)
     return found.group(1).strip() if found else None
+
+
+def shipped_architecture(template: dict) -> List[str]:
+    """
+    The cache's own architecture, ignoring any correction this export applied.
+
+    `export_content.py` overrides three Irekei wall templates and records the original in
+    `architecture_shipped`. Scoring against the corrected value would test this repo's
+    edit against the wiki that motivated it -- a loop that turns an edit into evidence --
+    so this comparison always reads the shipped value where one exists.
+    """
+    return template.get("architecture_shipped", template.get("architecture") or [])
 
 
 def takes_npc(template: dict) -> bool:
@@ -323,11 +340,15 @@ def main() -> int:
             return f"{('OK' if ok else 'X'):>6}"
 
         if style:
-            ok = any(style in (t.get("architecture") or []) for t in templates)
+            # Scored against `architecture_shipped` wherever the export has overridden
+            # the cache, so this number always describes the client's own data. Checking
+            # our own correction against the wiki that motivated it would be a loop, and
+            # would quietly convert an edit into evidence.
+            ok = any(style in shipped_architecture(t) for t in templates)
             line += verdict("arch", ok)
             if not ok:
                 misses.append(f"{title} architecture: wiki {style!r} ours "
-                              f"{[t.get('architecture') for t in templates]}")
+                              f"{[shipped_architecture(t) for t in templates]}")
         else:
             line += f"{'-':>6}"
 
@@ -365,6 +386,15 @@ def main() -> int:
             if stated is not None:
                 unpriced.append(title)
         print(line)
+
+    overridden = [r for r in rows if "architecture_shipped" in r]
+    if overridden:
+        print("\nNOTE: the export overrides architecture on " + str(len(overridden))
+              + " template(s). Scored below against the shipped value, not the "
+              "correction:")
+        for r in overridden:
+            print(f"   {r['asset_id']}  {r['architecture_shipped']} -> "
+                  f"{r['architecture']}   {(r.get('building_names') or ['<none>'])[:1]}")
 
     print("\nwiki building sections: " + str(len(found)))
     print("matched to a template: " + str(tally["matched"]))

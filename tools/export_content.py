@@ -43,6 +43,32 @@ from assets.asset_catalog import AssetCatalog, AssetKind
 
 STAT_ORDER = ["Strength", "Dexterity", "Constitution", "Intelligence", "Spirit"]
 
+# The one place this export deliberately departs from the cache.
+#
+# These three templates build the Irekei outer-wall gate, stair and straight sections and
+# are tagged `["Feudal"]`, where the Elven (2000209/11/12) and Invorri (2000227/8/9)
+# equivalents each carry their own style. Three independent things say Irekei:
+#
+#   * the structures they build are ids 1309200-1310000, one contiguous Irekei block
+#     whose other members are named `Irekei Outer Wall Gate`, `Irekei Outer Wall with
+#     Stairs`, `Irekei Outer Straight Wall`. The unprefixed names inside it are Irekei
+#     assets that were never renamed, not Feudal ones;
+#   * templates 2000195/2000196, the Irekei towers, sit in the same contiguous template
+#     block with the same dual-name shape and are tagged `Irekei`;
+#   * the Morloch wiki lists Irekei Outer Walls as ordinary Irekei buildings.
+#
+# The wall *caps* are left alone on purpose. They are tagged Feudal in every style --
+# including 2000207/2000208, which build structures actually named `Elven Outer Wall Cap`
+# -- so uniform rather than anomalous, and a rule this has no standing to overturn.
+#
+# Where this applies, `architecture_shipped` carries the cache's own value so nothing is
+# lost and the change is auditable. Delete this map to get the raw export back.
+ARCHITECTURE_CORRECTIONS = {
+    2000192: ["Irekei"],   # Irekei Outer Wall Gate
+    2000193: ["Irekei"],   # Irekei Outer Wall with Stairs
+    2000194: ["Irekei"],   # Irekei Outer Straight Wall
+}
+
 
 def signed32(v: Any) -> Any:
     """Attribute deltas are stored unsigned; -10 arrives as 4294967286."""
@@ -351,7 +377,11 @@ def main() -> int:
             # all trainer halls -- `Elven Guild Hall` is `["Feudal", "Forest",
             # "Mountains"]`, which is where it may go rather than what it looks like.
             # `Invorri` here against the wiki's `Invorii`. Empty on 4 templates.
-            "architecture": f.get("template_architecture") or [],
+            #
+            # Corrected on exactly three templates -- see ARCHITECTURE_CORRECTIONS. Where
+            # that applies, `architecture_shipped` below carries the cache's own value.
+            "architecture": ARCHITECTURE_CORRECTIONS.get(
+                asset_id, f.get("template_architecture") or []),
             # `max_ranks` 1 is the wiki's "not rankable": the building is placed at its
             # only rank and never upgrades. 139 of the 294 templates are like this.
             "max_ranks": f.get("template_max_ranks"),
@@ -376,6 +406,11 @@ def main() -> int:
             "doors": f.get("structure_doors") or [],
             "has_platform": bool(f.get("static_has_platform")),
         })
+        # Present only where this export overrode the cache, so a consumer that wants the
+        # shipped value can always recover it and a diff shows the departure.
+        if asset_id in ARCHITECTURE_CORRECTIONS:
+            structures[-1]["architecture_shipped"] = (
+                f.get("template_architecture") or [])
 
     # A template has no name of its own, which left 294 rows shipping `name: ""` and no way
     # to tell a Tree of Life from an Orc Slave Pen. Its identity is in the buildings its
@@ -450,6 +485,12 @@ def main() -> int:
         "structures.json": structures,
         "deeds.json": sorted(deeds, key=lambda r: (r["name"], r["asset_id"])),
     }
+    corrected = [s for s in structures if "architecture_shipped" in s]
+    if corrected:
+        print(f"architecture corrected on {len(corrected)} templates: "
+              + ", ".join(f"{s['asset_id']} {s['architecture_shipped']}->"
+                          f"{s['architecture']}" for s in corrected))
+
     for filename, rows in tables.items():
         with (out_dir / filename).open("w", encoding="utf-8") as fh:
             json.dump(rows, fh, indent=2)
