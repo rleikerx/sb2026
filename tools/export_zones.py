@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections import defaultdict
 import re
 import sys
 import time
@@ -188,6 +189,77 @@ class ZoneExporter:
         }
 
 
+def write_macrozones(out: Path, repo_root: Path, index: list) -> None:
+    """
+    `<continent>Icons/ZoneDataENGLISH.cfg` -> the map-screen zone table.
+
+    Three copies of this file ship, one per continent, and an earlier version of the
+    consumer guide said it "does not place a zone on a continent, so the zone-to-continent
+    question is still open". **The containing directory is the continent.** 129 of the 135
+    distinct names appear under exactly one; the six that appear under all three are the
+    battlegrounds and Chaos zones -- `Pandemonium`, `Bone Marches`, `Plain of Ashes`,
+    `Aeran Belendor`, `Western Battleground`, `Southern Battleground` -- which genuinely
+    exist on every world, so `continents` is a list rather than a string.
+
+    Only 25 of the 135 match a CZone record. The rest belong to Dalgoth and Vorringia,
+    whose zone records are not in this Aerynth cache at all -- their names have no near
+    miss among the 729 named zones here, so that is absence rather than a naming mismatch.
+
+    All 25 that do match are `zoneType` 1 and none is type 0, which is worth recording but
+    not over-reading: this file already documents zoneType as the zone's *shape* rather
+    than a tier, so the correlation says the map screen names rectangular zones, not that
+    type 1 means "macro". 218 of the 729 named zones are type 1, so 25 of 25 is well past
+    chance and the reason is not established here.
+
+    Lore text is skipped: this export carries mechanics, not prose. It is in the same
+    records if a consumer wants it.
+    """
+    config = repo_root / "export_aegisfall" / "config"
+    by_name: Dict[str, list] = defaultdict(list)
+    for entry in index:
+        if entry.get("name"):
+            by_name[entry["name"]].append(entry)
+
+    found: Dict[str, dict] = {}
+    for path in sorted(config.glob("*Icons/ZoneDataENGLISH.cfg")):
+        continent = path.parent.name.replace("Icons", "")
+        raw = path.read_bytes()
+        # These three ship as UTF-16 with a BOM, unlike every other .cfg.
+        text = (raw.decode("utf-16", errors="ignore")
+                if raw[:2] in (b"\xff\xfe", b"\xfe\xff")
+                else raw.decode("utf-8", errors="ignore"))
+        pattern = (r"<ZONENAME>\s*(.*?)\s*</ZONENAME>.*?<MINLEVEL>\s*(.*?)\s*</MINLEVEL>"
+                   r"\s*<MAXLEVEL>\s*(.*?)\s*</MAXLEVEL>")
+        for name, low, high in re.findall(pattern, text, re.S):
+            row = found.setdefault(name, {
+                "name": name,
+                "continents": [],
+                # `60+` is written with a trailing plus on the top band; kept verbatim
+                # rather than silently turned into 60.
+                "minLevel": low,
+                "maxLevel": high,
+                "zoneIds": [z["zoneId"] for z in by_name.get(name, [])],
+            })
+            if continent not in row["continents"]:
+                row["continents"].append(continent)
+
+    rows = sorted(found.values(), key=lambda r: (r["continents"][0], r["name"]))
+    (out / "macrozones.json").write_text(json.dumps({
+        "generator": "tools/export_zones.py",
+        "note": ("From <continent>Icons/ZoneDataENGLISH.cfg, one file per continent -- "
+                 "which is what places each zone on a continent. `zoneIds` are the CZone "
+                 "records of that name, all zoneType 1; empty for the Dalgoth and "
+                 "Vorringia zones, whose records are not in this cache. `maxLevel` may "
+                 "read `60+`."),
+        "count": len(rows),
+        "macrozones": rows,
+    }, indent=1), encoding="utf-8")
+    matched = sum(1 for r in rows if r["zoneIds"])
+    print("macrozones " + str(len(rows)) + " (" + str(matched)
+          + " matching a CZone record)  continents "
+          + str(sorted({c for r in rows for c in r["continents"]})))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -265,6 +337,8 @@ def main() -> None:
         json.dumps({"generator": "tools/export_zones.py",
                     "unitsPerMetre": 2.903,
                     "zones": index}, indent=1), encoding="utf-8")
+
+    write_macrozones(out, Path(args.dump).parent, index)
 
     # The file name per asset, so a staging tool joins on this alone rather than needing
     # `models/assets.json` as a second input. Absent when the models were not exported.

@@ -15,6 +15,7 @@ What it emits (mechanical data only - no lore or description prose):
     disciplines.json  discipline runes and their requirements
     talents.json      talent runes
     items.json        equippable items: slot, weight, value, damage, requirements
+    character_creation.json  what the creation screen actually offers, per the client
     deeds.json        the 880 buildable deeds: price, what they place, start rank
     structures.json   buildings: rank progression, health, and the mesh that
                       renders each rank
@@ -511,6 +512,47 @@ def main() -> int:
                                         player_classes),
         })
 
+    # --- what character creation actually offers -----------------------------------
+    #
+    # `Config/CharCreateRuneList.cfg` is the client's own list of what the creation screen
+    # shows, by section, and it is a stricter statement than the `standard_creation` flag
+    # on the rune. All 84 of its talent runes are inside the 92 that flag carries; the
+    # eight it leaves out are `Wolfpack Developer` and `QA Test Rune` -- which are exactly
+    # what they sound like -- plus `Proficient with Bows` and **the higher id of all five
+    # duplicated talent names**.
+    #
+    # That last part matters. `Proficient with Axes` exists twice, 250080 and 250123, with
+    # different data; this file offers 250080 and never 250123, which is the same row the
+    # Morloch wiki describes. Two independent sources agreeing on which of a duplicate pair
+    # is real is a better answer than either alone.
+    creation: Dict[str, Any] = {}
+    creation_cfg = REPO_ROOT / "export_aegisfall" / "config" / "Config" / "CharCreateRuneList.cfg"
+    if creation_cfg.exists():
+        text = creation_cfg.read_text(encoding="utf-8", errors="ignore")
+        by_id = {r["asset_id"]: r for r in
+                 list(classes) + list(disciplines) + list(talents)}
+        for race in races.values():
+            for variant in race["variants"]:
+                by_id[variant["asset_id"]] = {"name": race["race"],
+                                              "sex": variant.get("sex")}
+        import re as _re
+        for block in _re.finditer(r"(\w+)BEGIN\s*(.*?)\s*\1END", text, _re.S):
+            section = block.group(1).lower()
+            rows = []
+            for line in block.group(2).splitlines():
+                found = _re.match(r"\s*(\d+)\s*(male|female)?", line)
+                if not found:
+                    continue
+                asset_id = int(found.group(1))
+                entry = {"asset_id": asset_id,
+                         "name": (by_id.get(asset_id) or {}).get("name")}
+                if found.group(2):
+                    entry["sex"] = found.group(2).upper()
+                rows.append(entry)
+            creation[section] = rows
+        print("character creation: "
+              + ", ".join(f"{k} {len(v)}" for k, v in creation.items()))
+
     tables = {
         "races.json": sorted(races.values(), key=lambda r: r["race"]),
         "classes.json": sorted(classes, key=lambda r: r["name"]),
@@ -519,6 +561,7 @@ def main() -> int:
         "items.json": items,
         "structures.json": structures,
         "deeds.json": sorted(deeds, key=lambda r: (r["name"], r["asset_id"])),
+        "character_creation.json": creation,
     }
     corrected = [s for s in structures if "architecture_shipped" in s]
     if corrected:
@@ -529,7 +572,8 @@ def main() -> int:
     for filename, rows in tables.items():
         with (out_dir / filename).open("w", encoding="utf-8") as fh:
             json.dump(rows, fh, indent=2)
-        print(f"{filename:20s} rows={len(rows)}")
+        count = sum(len(v) for v in rows.values()) if isinstance(rows, dict) else len(rows)
+        print(f"{filename:26s} rows={count}")
 
     print(f"\ncontent|out={out_dir}")
     sample = tables["races.json"][0] if tables["races.json"] else None
