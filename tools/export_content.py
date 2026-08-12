@@ -15,6 +15,7 @@ What it emits (mechanical data only - no lore or description prose):
     disciplines.json  discipline runes and their requirements
     talents.json      talent runes
     items.json        equippable items: slot, weight, value, damage, requirements
+    deeds.json        the 880 buildable deeds: price, what they place, start rank
     structures.json   buildings: rank progression, health, and the mesh that
                       renders each rank
 
@@ -392,6 +393,54 @@ def main() -> int:
         if names:
             entry["building_names"] = names
 
+    # --- deeds -----------------------------------------------------------------------
+    #
+    # `AssetKind.DEED` was not read at all, which is why this export said building costs
+    # were server-side: `items.json` carries three generic deed rows, and the 880 real
+    # ones live in their own kind. Each carries `item_value`, and those values are the
+    # prices the wiki quotes -- all 48 buildings it costs agree exactly.
+    #
+    # `deed_structure_id` is three different things depending on the deed, so it is
+    # emitted raw and resolved only where the resolution is real. See `references` below.
+    kind_of: Dict[int, str] = {}
+    for kind in AssetKind:
+        for asset_id in catalog.iter_asset_ids(kind):
+            kind_of[asset_id] = kind.name
+
+    deeds: List[dict] = []
+    for asset_id in catalog.iter_asset_ids(AssetKind.DEED):
+        _, obj = raw_object(am, asset_id)
+        if obj is None:
+            continue
+        f = obj.save_json()
+        target = f.get("deed_structure_id")
+        # Ids below 10,000 are an index into a server-side table rather than an asset id
+        # -- `Feudal Outer Walls` is 1, `Trebuchet` 10, `Healer Trainer` 103 -- and they
+        # collide with real low-numbered props and creatures. Resolving them would
+        # manufacture 489 wrong joins, so only ids in asset space are resolved.
+        resolved = (kind_of.get(target) if isinstance(target, int) and target >= 10000
+                    else None)
+        deeds.append({
+            "asset_id": asset_id,
+            "name": clean(f.get("obj_name")),
+            "icon_texture_id": f.get("obj_icon") or None,
+            # The builder's price, and the wiki's `Cost` column.
+            "value": f.get("item_value"),
+            "weight": f.get("item_wt"),
+            "deed_type": f.get("deed_type"),
+            "target_id": target,
+            # `STRUCTURE` on 153 (the building deeds, joining to structures.json),
+            # `PROP` on ~220 (the furniture deeds), null on the rest -- either a
+            # server-side index or, on the 18 charters, absent entirely.
+            "target_kind": resolved,
+            "start_rank": f.get("deed_start_rank"),
+            "is_fortress": bool(f.get("deed_is_fortress")),
+            "employment": f.get("deed_employment"),
+            "eligible_races": allowed(f.get("item_race_req"), "races", playable_races),
+            "eligible_classes": allowed(f.get("item_class_req"), "classes",
+                                        player_classes),
+        })
+
     tables = {
         "races.json": sorted(races.values(), key=lambda r: r["race"]),
         "classes.json": sorted(classes, key=lambda r: r["name"]),
@@ -399,6 +448,7 @@ def main() -> int:
         "talents.json": sorted(talents, key=lambda r: r["name"]),
         "items.json": items,
         "structures.json": structures,
+        "deeds.json": sorted(deeds, key=lambda r: (r["name"], r["asset_id"])),
     }
     for filename, rows in tables.items():
         with (out_dir / filename).open("w", encoding="utf-8") as fh:

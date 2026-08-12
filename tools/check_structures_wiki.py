@@ -46,22 +46,31 @@ under Trainer Buildings, which is not an architecture at all.
 building accepts (`Guard Captain`, `Banker`) where the cache stores a per-rank *count*.
 Agreement here means both sources agree the building takes hirelings at all.
 
-`Cost` is **not checkable from the cache** and is not a gap in this export. The wiki quotes
-a builder's price (750k for a Barracks); the client ships no per-building deed carrying it
--- `items.json` has three deed rows in total, all generic, all value 0 or 1. Prices live
-server-side.
+`Cost` **is** checkable, and an earlier version of this file said it was not. The reasoning
+was that `items.json` holds three generic deed rows, all value 0 or 1, so prices had to be
+server-side. True of `items.json`; false of the cache. Deeds are a **separate asset kind**
+and it carries 880 of them, each with `item_value`, none of which `export_content.py` read.
+They are now in `content/deeds.json` and every price the wiki quotes agrees exactly.
 
-`Size` (`4x2`) has no counterpart either. `template_zone_no_build` and
-`template_zone_influence` are radii in world units, a different quantity from a grid
-footprint, and guessing a mapping between them would manufacture agreement rather than
-test for it.
+That makes three claims in this file's history that were statements about a search rather
+than about the source: the buildings "not being on the wiki", and now the costs "not being
+in the cache". Both times the missing thing was one lookup away in a place I had not
+looked.
+
+`Size` (`4x2`) has no counterpart. `template_zone_no_build` and `template_zone_influence`
+are radii in world units, a different quantity from a grid footprint, and guessing a
+mapping between them would manufacture agreement rather than test for it.
 
 The score
 ---------
-All 52 sections match a template, and 102 of 107 comparable fields agree: architecture
-43/44, `not rankable` 11/11, hirelings 48/52. **Every one of the five disagreements is a
-wall**, in two groups, and both look like properties of the cache rather than of this
-comparison.
+All 52 sections match a template, and 154 of 159 comparable fields agree: architecture
+43/44, `not rankable` 11/11, hirelings 48/52, **cost 52/52**. The cost column is the
+strongest single result in any of these comparisons -- 52 prices from 1,500,000 down to
+50,000, read out of a different asset kind than the buildings themselves, matching a
+player-written table exactly.
+
+**Every one of the five disagreements is a wall**, in two groups, and both look like
+properties of the cache rather than of this comparison.
 
   * `Irekei Outer Walls` is tagged `Feudal`. Templates 2000192/3/4 build the Irekei gate,
     stair and straight-wall pieces and carry `architecture: ["Feudal"]`, where the Elven
@@ -197,6 +206,35 @@ def row_field(body: str, label: str) -> Optional[str]:
     return found.group(1).strip() if found else None
 
 
+def money(value: Optional[str]) -> Optional[int]:
+    """`750k` -> 750000, `1.5m` -> 1500000."""
+    found = re.match(r"([\d.]+)\s*([kmKM])?", (value or "").strip())
+    if not found:
+        return None
+    scale = {"k": 1000, "m": 1_000_000}.get((found.group(2) or "").lower(), 1)
+    return int(float(found.group(1)) * scale)
+
+
+def deed_names(title: str, style: Optional[str]) -> List[str]:
+    """
+    The deed rows a wiki section could name.
+
+    Deeds are named for the building, usually with ` Deed` appended -- `Barracks Deed`,
+    `Irekei Citadel Deed` -- but the wall sets and the siege tent carry the bare name.
+    Unlike the structure join this needs no `Feudal ` prefix: the deeds use the wiki's own
+    bare spelling, which is a second sign the wiki was written off the builder's list.
+
+    `Cottage [Log, Stone, Wood]` expands the same way it does for structures, and has to:
+    the three material variants are three separate deeds, all priced the same.
+    """
+    title = title.strip().replace("Invorii", "Invorri")
+    bracket = re.search(r"\[([^\]]*)\]", title)
+    base = re.sub(r"\s*\[[^\]]*\]", "", title).strip()
+    bases = ([f"{p.strip()} {base}" for p in bracket.group(1).split(",") if p.strip()]
+             if bracket else [base])
+    return [name + suffix for name in bases for suffix in (" Deed", "")]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -204,8 +242,14 @@ def main() -> int:
     ap.add_argument("--cache", default=str(REPO_ROOT / ".wikicache" / "buildings.json"))
     args = ap.parse_args()
 
-    rows = json.loads((Path(args.export) / "content" / "structures.json")
-                      .read_text(encoding="utf-8"))
+    content = Path(args.export) / "content"
+    rows = json.loads((content / "structures.json").read_text(encoding="utf-8"))
+    # `deeds.json` is what makes Cost checkable; this file used to say it was not.
+    deeds: Dict[str, List[dict]] = defaultdict(list)
+    deed_file = content / "deeds.json"
+    if deed_file.exists():
+        for deed in json.loads(deed_file.read_text(encoding="utf-8")):
+            deeds[deed["name"]].append(deed)
     # A building's attributes live on the template whose ranks put it down, so the lookup
     # goes name -> template rather than name -> structure.
     by_building: Dict[str, List[dict]] = defaultdict(list)
@@ -218,8 +262,9 @@ def main() -> int:
     tally: Counter = Counter()
     misses: List[str] = []
     unmatched: List[str] = []
+    unpriced: List[str] = []
 
-    print(f"{'building':<26}{'style':<10}{'arch':>6}{'rank':>6}{'hire':>6}")
+    print(f"{'building':<26}{'style':<10}{'arch':>6}{'rank':>6}{'hire':>6}{'cost':>6}")
     for title, body, style in found:
         templates: List[dict] = []
         if title.endswith("Outer Walls"):
@@ -277,6 +322,19 @@ def main() -> int:
                 misses.append(f"{title} hirelings: wiki {hirelings!r} ours none on any rank")
         else:
             line += f"{'-':>6}"
+
+        stated = money(row_field(body, "Cost"))
+        priced = [d for name in deed_names(title, style) for d in deeds.get(name, [])]
+        if stated is not None and priced:
+            ok = any(d.get("value") == stated for d in priced)
+            line += verdict("cost", ok)
+            if not ok:
+                misses.append(f"{title} cost: wiki {stated} ours "
+                              f"{[d.get('value') for d in priced]}")
+        else:
+            line += f"{'-':>6}"
+            if stated is not None:
+                unpriced.append(title)
         print(line)
 
     print("\nwiki building sections: " + str(len(found)))
@@ -285,12 +343,14 @@ def main() -> int:
         print("unmatched: " + str(unmatched))
     print(f"\n{'field':<22}{'compared':>9}{'agree':>7}{'differ':>8}")
     for key, label in (("arch", "Architecture"), ("rank", "Extras: not rankable"),
-                       ("hire", "Hirelings (presence)")):
+                       ("hire", "Hirelings (presence)"), ("cost", "Cost (deed value)")):
         total = tally[key + "_total"]
         if total:
             print(f"{label:<22}{total:>9}{tally[key]:>7}{total - tally[key]:>8}")
-    checked = sum(tally[k + "_total"] for k in ("arch", "rank", "hire"))
-    agreed = sum(tally[k] for k in ("arch", "rank", "hire"))
+    if unpriced:
+        print("wiki quotes a cost, no deed row found: " + str(unpriced))
+    checked = sum(tally[k + "_total"] for k in ("arch", "rank", "hire", "cost"))
+    agreed = sum(tally[k] for k in ("arch", "rank", "hire", "cost"))
     print(f"\n{agreed}/{checked} agree")
     if misses:
         print("disagreements -- read each one before assuming the cache is wrong:")

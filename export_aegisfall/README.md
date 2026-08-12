@@ -38,6 +38,7 @@ some numbers you may already have baked are wrong rather than merely stale.
 | `content/items.json` | `damage` was empty on all 4,021 rows; race/class restrictions were **inverted** on 675 |
 | `content/disciplines.json`, `talents.json` | race/class requirements were **inverted**; six new columns — see below |
 | `content/powers.json` | gains an `actions` table, without which 19 rune effects are unreachable |
+| `content/deeds.json` | **new** — 880 deeds with the builder's price, an asset kind nothing read |
 
 ### Take these — they are new
 
@@ -323,6 +324,7 @@ convenience."* This is that same mechanical data read out of the shipped client.
 | `disciplines.json` | 48 | requirements, granted powers, rune category |
 | `talents.json` | 240 | requirements and grants, **which are player-selectable**, rune category, attribute floors, applied effects |
 | `items.json` | 4,021 | equip slot, weight, value, **damage**, weapon speed and range, level/rank requirements, race/class restrictions |
+| `deeds.json` | 880 | **new** — the builder's price, what each deed places, start rank, employment |
 | `structures.json` | 1,062 | **two record types**: 294 buildable templates with a rank ladder, architecture, city radii and NPC slots; 768 named structures with floors, levels and doors. See below |
 | `powers.json` | 1,465 | cost, target, area, cast time, prerequisites, the ACTION chain, and every message string |
 | `effects.json` | 2,950 | what a power *does*: mods, conditions, animation overrides, and who applies it |
@@ -433,8 +435,8 @@ That is the same mistake as the two perfect scores described above — a check t
 cover the thing cannot clear it — and "the wiki has nothing on this" turned out to be a
 statement about the search rather than about the wiki.
 
-`python tools/check_structures_wiki.py` matches **all 52** and agrees on **102 of 107**
-comparable fields: architecture 43/44, `not rankable` 11/11, hirelings 48/52. The join
+`python tools/check_structures_wiki.py` matches **all 52** and agrees on **154 of 159**
+comparable fields: architecture 43/44, `not rankable` 11/11, hirelings 48/52, **cost 52/52**. The join
 needs three naming rules, all mechanical — the wiki drops the `Feudal ` prefix because
 Feudal is the default style, spells `Invorii` where the cache spells `Invorri`, and writes
 `Cottage [Log, Stone, Wood]` for three separate rows.
@@ -478,14 +480,31 @@ two things follow from the difference:
 radii in world units, a different quantity, and mapping one to the other would manufacture
 agreement rather than test for it.
 
-**Correction on Cost.** An earlier version of this section said prices were server-side
-because `items.json` holds only three generic deed rows. That is true of `items.json` and
-false of the cache: deeds are a **separate asset kind**, and the cache carries **880 of
-them**, each with `item_value` — `Inner Wall Gate Deed` 48,000, `Outer Wall Gatehouse
-Deed` 80,000 — plus `deed_structure_id`, `deed_start_rank` and `deed_employment`.
-`export_content.py` does not read `AssetKind.DEED` at all, so none of it is exported yet.
-Cost is checkable against the wiki once it is; that is the next thing to do here, not a
-settled absence.
+### deeds.json — new, and it settles the Cost column
+
+**Take `content/deeds.json`.** An earlier version of this section said building prices were
+server-side, because `items.json` holds three generic deed rows. True of `items.json`,
+false of the cache: deeds are a **separate asset kind** and there are **880 of them**, none
+of which `export_content.py` read.
+
+| column | what it is |
+|---|---|
+| `value` | the builder's price — the wiki's `Cost`. 879 of 880 carry one, from 1 to 1,500,000 |
+| `target_id` / `target_kind` | what it places: `STRUCTURE` on 152, `PROP` on 219 (furniture), null on the rest |
+| `deed_type`, `start_rank`, `is_fortress`, `employment` | placement class, the rank it starts at, fortress components, and the NPC it employs |
+| `eligible_races`, `eligible_classes` | restrict-aware, same semantics as everywhere else |
+
+**Every price agrees with the wiki — 52 of 52**, from the 1,500,000 Citadel down to the
+50,000 wall sets. That is the strongest single result of any of these comparisons: 52
+numbers read out of a different asset kind than the buildings themselves, matching a
+player-written table exactly. `python tools/check_structures_wiki.py` now reports it.
+
+One caveat on `target_id`. It means three different things depending on the deed, so it is
+emitted raw and resolved only where the resolution is real. Ids **below 10,000 are a
+server-side table index, not an asset id** — `Feudal Outer Walls` is 1, `Trebuchet` 10,
+`Healer Trainer` 103 — and they collide with genuine low-numbered props and creatures.
+Resolving them would have produced 489 confident, wrong joins. `target_kind` is null on
+those; trust it rather than `target_id` alone.
 
 The *Tree of Life* rank table remains the one unresolved item: its wiki health ladder
 (80,000 → 500,000) does not match ours (3,000 → 25,000 on the template that builds it),
