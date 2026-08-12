@@ -44,6 +44,7 @@ some numbers you may already have baked are wrong rather than merely stale.
 | `zones/macrozones.json` | **new** — 135 zones with continent and level band; zone→continent was never open |
 | `content/enchantments.json` | **new** — 524 item prefixes/suffixes with reagent costs; explains the `ITEM-A`/`ITEM-B` effects |
 | `content/starting_kits.json` | **new** — 68 race/sex/class blocks, 451 starting loadouts |
+| `content/guild_ranks.json` | **new** — 21 charters, 163 rank titles; three charters look like cut content |
 
 ### Take these — they are new
 
@@ -333,6 +334,7 @@ convenience."* This is that same mechanical data read out of the shipped client.
 | `character_creation.json` | 132 | **new** — the client's own creation lists: 22 race runes with sex, 4 classes, 22 promotions, 84 traits |
 | `enchantments.json` | 524 | **new** — reagent cost, added value and mods for every item prefix and suffix |
 | `starting_kits.json` | 68 | **new** — 451 loadouts: what each race/sex/class combination starts holding |
+| `guild_ranks.json` | 21 | **new** — 163 rungs across the guild charters, with female forms and the charter deed |
 | `structures.json` | 1,062 | **two record types**: 294 buildable templates with a rank ladder, architecture, city radii and NPC slots; 768 named structures with floors, levels and doors. See below |
 | `powers.json` | 1,465 | cost, target, area, cast time, prerequisites, the ACTION chain, and every message string |
 | `effects.json` | 2,950 | what a power *does*: mods, conditions, animation overrides, and who applies it |
@@ -612,6 +614,34 @@ duplicate pair is real is a better answer than either alone.
 **If you are building a creation screen, drive it from this file, not from
 `standard_creation`.** Three race variants are likewise flagged but not offered
 (Half-Giant 2019, Human 253000/253001, all male body variants).
+
+### guild_ranks.json — the 21 charters and their rank ladders
+
+**New.** The 21 `Config/Ranks_*.cfg` files: a charter name, a declared rank count, and one
+title per rung. **163 rungs, and `NUMRANKS` equals the rung count on every one of the 21** —
+the file's own internal check, and it passes.
+
+**34 rungs carry a second, female form.** Noble House runs Serf, Vassal, Exultant, then
+Lord/Lady, Baron/Baroness, Count/Countess, Duke/Duchess, King/Queen, Emperor/Empress. The
+Amazon Temple is the sharpest example: the male ladder is Thrall → Slave → Servant →
+Consort → Seneschal → Regent, the female one Amazon → Warrior → Chieftess → Princess →
+Majestrix → Imperatrix. `title_female` is null where a rung uses one title for both.
+
+**`charter` is not unique — use `file`.** `Ranks_Oblivion` and `Ranks_Unholy` both name
+themselves *Unholy Legion* and are entirely different ladders:
+Disciple/Zealot/Slayer/Executioner/Ghor'ga against Footman/Fell Legionaire/Fell
+Centurion/Dark Captain/Dread Lord.
+
+`charter_deed` joins to `deeds.json` — all 17 charter deeds are accounted for, every one
+100,000 gold. The mapping is an explicit table rather than fuzzy matching, because the deeds
+use short forms (`Aracoix K'hree` → `Kh'ree Charter`, `Temple of the Cleansing Flame` →
+`Templar Charter`).
+
+**Three charters have no deed and no wiki page**, and are most likely cut content still
+sitting in the config: **Coven of Brialla**, **Academy of Heralds**, **Pirate's Crew**.
+Three more differ in name between the config and the wiki, which reads as a rename rather
+than a mismatch — `Cult of the Dark Ones`/*Cult of the Scourge*, `Military`/*Military
+Legion*, `Thieves' Band`/*Thieves' Den*. 15 of the 21 match `Category:Charters` outright.
 
 ### starting_kits.json — what a new character is handed
 
@@ -1512,7 +1542,7 @@ have to find them again:
 |---|---:|---|
 | ~~`PowActionCostInfo.cfg`~~ | 47,675 | **now exported** as `content/enchantments.json` — see below |
 | ~~`StartingKitTable.cfg`~~ | 20,092 | **now exported** as `content/starting_kits.json` — see above |
-| `Ranks_*.cfg` | ~20 files | guild rank titles per charter type |
+| ~~`Ranks_*.cfg`~~ | 21 files | **now exported** as `content/guild_ranks.json` — see above |
 | `GuildGovConfig.cfg`, `GuildServerConfig.cfg`, `Guild_Restrictions.*` | ~11 KB | guild government rules and per-server restrictions |
 
 `RaceClassDiscTalents.cfg` is a UID-to-English name table for the race, class, discipline

@@ -17,6 +17,7 @@ What it emits (mechanical data only - no lore or description prose):
     items.json        equippable items: slot, weight, value, damage, requirements
     character_creation.json  what the creation screen actually offers, per the client
     starting_kits.json  what each race/sex/class combination starts the game holding
+    guild_ranks.json  the 21 guild charters and their rank ladders
     deeds.json        the 880 buildable deeds: price, what they place, start rank
     structures.json   buildings: rank progression, health, and the mesh that
                       renders each rank
@@ -603,6 +604,74 @@ def main() -> int:
               + ("; NOT eligible for that class: " + str(bad) if bad else
                  "; every one is a class that race may take"))
 
+    # --- guild rank ladders -------------------------------------------------------------
+    #
+    # 21 `Config/Ranks_*.cfg` files, one per guild charter: a `NAME=`, a `NUMRANKS=`, and
+    # one `RANKNAME= "title" ["female title"]` per rung. **All 21 have NUMRANKS equal to
+    # the number of RANKNAME lines**, which is the file's own internal check and it passes.
+    #
+    # 34 of the 163 rungs carry a second, female form -- `Lord`/`Lady`, `Baron`/`Baroness`,
+    # and the Amazon Temple, where the male ladder is Thrall/Slave/Servant/Consort and the
+    # female one is Amazon/Warrior/Chieftess/Princess. The rest are the same either way.
+    #
+    # `Ranks_Oblivion` and `Ranks_Unholy` both name themselves "Unholy Legion" and are
+    # **different ladders** -- Disciple/Zealot/Slayer against Footman/Fell Legionaire/Fell
+    # Centurion -- so `file` is the identity here and `charter` is not unique.
+    CHARTER_DEEDS = {
+        # Each charter's deed, where one ships. The deeds use short forms, so this is an
+        # explicit map rather than fuzzy matching; every entry is the only candidate
+        # containing its distinctive word, and all 17 charter deeds are accounted for.
+        "Amazon Temple": "Amazon Charter",
+        "Aracoix K'hree": "Kh'ree Charter",
+        "Barbarian Clan": "Barbarian Charter",
+        "Centaur Cohort": "Cohort Charter",
+        "Church of the All-Father": "Cathedral Charter",
+        "Cult of the Dark Ones": "Cult of the Scourge Charter",
+        "Dwarf Hold": "Dwarf Hold Charter",
+        "High Court": "High Court Charter",
+        "Mercenary Company": "Mercenary Charter",
+        "Military": "Military Charter",
+        "Noble House": "Noble Charter",
+        "Ranger's Brotherhood": "Ranger Charter",
+        "Temple of the Cleansing Flame": "Templar Charter",
+        "Thieves' Band": "Thieves Charter",
+        "Unholy Legion": "Unholy Legion Charter",
+        "Virakt": "Irekei Virakt Charter",
+        "Wizard's Conclave": "Wizard Charter",
+    }
+    guild_ranks: List[dict] = []
+    config_dir = REPO_ROOT / "export_aegisfall" / "config" / "Config"
+    deed_by_name = {d["name"]: d for d in deeds}
+    import re as _re
+    for path in sorted(config_dir.glob("Ranks_*.cfg")):
+        text = path.read_text(encoding="latin-1", errors="ignore")
+        found = _re.search(r'NAME=\s*"([^"]*)"', text)
+        charter = found.group(1) if found else None
+        declared = _re.search(r"NUMRANKS=\s*(\d+)", text)
+        titles = [_re.findall(r'"([^"]*)"', line) for line in text.splitlines()
+                  if line.strip().startswith("RANKNAME=")]
+        deed = deed_by_name.get(CHARTER_DEEDS.get(charter or "", ""))
+        guild_ranks.append({
+            "file": path.stem,
+            "charter": charter,
+            "declared_ranks": int(declared.group(1)) if declared else None,
+            "charter_deed": ({"asset_id": deed["asset_id"], "name": deed["name"],
+                              "value": deed["value"]} if deed else None),
+            "ranks": [{"rank": i + 1,
+                       "title": clean(t[0]) if t else None,
+                       "title_female": clean(t[1]) if len(t) > 1 else None}
+                      for i, t in enumerate(titles)],
+        })
+    if guild_ranks:
+        mismatched = [g["file"] for g in guild_ranks
+                      if g["declared_ranks"] != len(g["ranks"])]
+        no_deed = [g["charter"] for g in guild_ranks if not g["charter_deed"]]
+        print("guild ranks: " + str(len(guild_ranks)) + " charters, "
+              + str(sum(len(g["ranks"]) for g in guild_ranks)) + " rungs"
+              + ("; NUMRANKS disagrees on " + str(mismatched) if mismatched
+                 else "; NUMRANKS matches the rung count on every one")
+              + "; no charter deed: " + str(no_deed))
+
     tables = {
         "races.json": sorted(races.values(), key=lambda r: r["race"]),
         "classes.json": sorted(classes, key=lambda r: r["name"]),
@@ -613,6 +682,7 @@ def main() -> int:
         "deeds.json": sorted(deeds, key=lambda r: (r["name"], r["asset_id"])),
         "character_creation.json": creation,
         "starting_kits.json": kits,
+        "guild_ranks.json": guild_ranks,
     }
     corrected = [s for s in structures if "architecture_shipped" in s]
     if corrected:
