@@ -632,6 +632,52 @@ exported**, in full, as `motions/tracks/` — see the next section.
 For reference use — proportion, silhouette, how a body was cut into parts — the
 creature GLBs are fine as they are.
 
+### 18 rigs are bound to no model, and one of them is a siege engine
+
+`rig/` carries 103 skeletons. The creature catalogue binds 85. The other **18 are complete
+rigs with clips, referenced by nothing in this build** — their bones are in
+`rig/skeletons.json` and their clips are in `motions/tracks/clips/` already, so they are
+available, just unused.
+
+**Skeleton 52 is the interesting one: a wheeled siege engine.** 15 bones — a `BODY`
+chassis, `WHEEL01` forward and `WHEEL02` behind, a `CRANK`, and a 9.03-unit `ARM` ending in
+`RWRIST` → `RHELD`, which is the attachment point every rig in this cache uses for a held
+object. Three clips, one per ANIMID band, which is how a simple non-humanoid rig is
+authored:
+
+| clip | slots | what moves |
+|---|---|---|
+| `52000001` | 1–8, 37 (movement) | **only the two wheels**, 12°/frame — a 30-frame loop |
+| `52000010` | 10–61 (idle) | nothing; a single static frame, parked |
+| `52000075` | 64–117 (attack, incl. 75/76 `powerActionAttack`) | `CRANK` a full revolution, `WHEEL02`, and the `ARM` |
+
+The fire clip reads exactly like a catapult: the `ARM` snaps from +80° to +10° off vertical
+in three frames (0.2 s) and `RHELD` travels from `(0, 2.94, −5.40)` to `(0, 9.68, +2.51)` —
+low-and-behind to high-and-forward — then winds back down over the remaining 0.6 s and
+loops.
+
+The roll clip is internally consistent in a way worth checking against: 12° per frame is
+exactly 360° over its 30 frames, so one revolution per 2.0 s. At the wheel's 1.359-unit
+radius that is 3.29 m of ground per revolution, or **1.64 m/s** — about two thirds of the
+2.50 m/s walk in `rules.json`, which is what a heavy machine being pushed should be.
+
+Nothing in the cache binds it: zero assets across every kind, zero race runes. The wheeled
+props that exist (`Elven Ballista`, `Wagon`, `Cart`) are static meshes with no skeleton at
+all. So this is a rig authored for a siege engine whose model either never shipped or is
+assembled server-side.
+
+The rest of the unbound 18, for anyone shopping:
+
+| skeleton | bones | clips | what it looks like |
+|---|---:|---:|---|
+| 111, 112 | 43 | **231 each** | full humanoid rigs with the complete clip library |
+| 122 | 129 | 8 | a **face rig** — `LFACEUP`, `LFACELOWER`, and their `_END` tips |
+| 3 | 27 | 7 | quadruped/serpent — `BODY1..3`, `JAW` |
+| 42, 61, 63 | 23–49 | 1–18 | tailed bodies (`TAIL01..04`) |
+| 57 | 4 | 1 | `ROOT`, `LWING`, `RWING`, `LOWERBACK` — a bird reduced to nothing |
+| 46 | 33 | 11 | winged humanoid |
+| 2, 26, 28, 31, 33, 40, 114 | 25–42 | 5–16 | humanoid variants |
+
 ## motions/ and animations/ — the clips, and how to play one
 
 ```
