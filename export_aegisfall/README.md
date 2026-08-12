@@ -42,6 +42,7 @@ some numbers you may already have baked are wrong rather than merely stale.
 | `content/items.json` | ten more columns — **armour had no defense rating**, and 1,030 items no sex restriction |
 | `content/character_creation.json` | **new** — what the creation screen actually offers, incl. two dev runes it does not |
 | `zones/macrozones.json` | **new** — 135 zones with continent and level band; zone→continent was never open |
+| `content/enchantments.json` | **new** — 524 item prefixes/suffixes with reagent costs; explains the `ITEM-A`/`ITEM-B` effects |
 
 ### Take these — they are new
 
@@ -329,6 +330,7 @@ convenience."* This is that same mechanical data read out of the shipped client.
 | `items.json` | 4,021 | equip slot, weight, value, **damage**, **defense rating**, durability, bulk, weapon speed and range, skill/level/rank requirements, race/class/discipline/**sex** restrictions, resistances, female mesh |
 | `deeds.json` | 880 | **new** — the builder's price, what each deed places, start rank, employment |
 | `character_creation.json` | 132 | **new** — the client's own creation lists: 22 race runes with sex, 4 classes, 22 promotions, 84 traits |
+| `enchantments.json` | 524 | **new** — reagent cost, added value and mods for every item prefix and suffix |
 | `structures.json` | 1,062 | **two record types**: 294 buildable templates with a rank ladder, architecture, city radii and NPC slots; 768 named structures with floors, levels and doors. See below |
 | `powers.json` | 1,465 | cost, target, area, cast time, prerequisites, the ACTION chain, and every message string |
 | `effects.json` | 2,950 | what a power *does*: mods, conditions, animation overrides, and who applies it |
@@ -837,6 +839,42 @@ power-to-effect join is built on.
 with `loopanimid` they are set on 674 powers, 529 of the 560 that cast for 2 s or more, so
 they are the phases of a cast. Which starts and which finishes is not established, so they
 are not named as if it were.
+
+### enchantments.json — what a prefix or suffix costs, and what it does
+
+**New.** `PowActionCostInfo.cfg` is 524 lines of `PRE-003 "Iron" 2 "Sulfur" 1 #
+"Uncommon"` — the reagent cost of every item prefix and suffix — and nothing read it. It
+is the crafting counterpart of what `rules.json` opened for combat: with it, both halves
+of an enchantment are computable from the cache.
+
+**Everything joins.** All 524 ids are power actions in `powers.json`'s `actions` table,
+and all 17 reagents (Iron, Sulfur, Adamant, Truesteel, Azoth, Mandrake, Diamond …) are
+rows in `items.json`. 280 prefixes, 244 suffixes, 1,626 cost lines.
+
+The chain runs **cost → action → effects → mods**, and the effects carry the meaning:
+
+```
+PRE-003  "Iron" 2 "Sulfur" 1        cost
+  -> action PRE-003 applies PRE-003A, PRE-003B
+     PRE-003A  ItemName "Uncommon", Value 362.5, ArmorPiercing 2
+     PRE-003B  OCV 25
+```
+
+Each row therefore carries `cost`, `value` (the gold the enchantment adds), and `mods` —
+the real stat effects with `ItemName` and `Value` lifted out.
+
+**This also explains the `ITEM-A` / `ITEM-B` placeholder effect names.** Those are 1,132 of
+the 2,950 effects and by far the largest group of the 194 that carry a token where a
+display name belongs. They are not junk data: they are the **two halves of an item
+enchantment** — A carrying the name, value and primary mod, B the secondary.
+
+The display name is in the cache twice — as the `#` comment in the cost file and as the
+`ItemName` mod on the effect — and both are exported, as `name` and `nameFromEffect`.
+**521 of 524 agree exactly and none disagrees.** The three without an effect-side name are
+`PRE-335 Hardened`, `PRE-336 Forged` and `PRE-337 Trueforged`, which name `PRE-335A`/`336A`/
+`337A` — **effect ids `Effects.cfg` does not define.** Those rows carry `missingEffects`
+rather than an empty list that would read as "does nothing"; it is a dangling reference in
+the shipped data, reported rather than smoothed.
 
 ### rules.json — the tables powers.json refers to but does not contain
 
@@ -1444,7 +1482,7 @@ have to find them again:
 
 | file | bytes | what it holds |
 |---|---:|---|
-| `PowActionCostInfo.cfg` | 47,675 | **reagent cost per power action** — `PRE-003 "Iron" 2 "Sulfur" 1 # "Uncommon"`. The crafting/enchant cost table |
+| ~~`PowActionCostInfo.cfg`~~ | 47,675 | **now exported** as `content/enchantments.json` — see below |
 | `StartingKitTable.cfg` | 20,092 | what a new character is given |
 | `Ranks_*.cfg` | ~20 files | guild rank titles per charter type |
 | `GuildGovConfig.cfg`, `GuildServerConfig.cfg`, `Guild_Restrictions.*` | ~11 KB | guild government rules and per-server restrictions |
