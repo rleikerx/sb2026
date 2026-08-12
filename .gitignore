@@ -20,6 +20,8 @@ export_gltf/
 export_icons/
 export_textures/
 export_atlas/
+# Fetched wiki pages for tools/check_powers_wiki.py -- re-fetchable, not ours
+.wikicache/
 # One-creature verification exports written by pose/rest checks
 .resttest/
 .wingtest/

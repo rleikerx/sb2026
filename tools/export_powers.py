@@ -47,24 +47,29 @@ data:
     unused12   0 on all 1,464 well-formed powers. Parsed, stored, never varied.
     unused13   0 on 1,463; one power reads 10.0. Dead in this build either way.
 
-    durationSeconds   was `unknown16`. Every non-zero value is a canonical duration in
-                      seconds and is uniform within a category: all 425 WEAPON powers read
-                      20.0 (5 read 30.0), all 13 STANCE powers read 30.0, and BUFF runs
-                      120/300/600 with a single 3600 -- which belongs to `Fortress of
-                      Faith`. 562 powers read 0, which is "not stated here" rather than
-                      "instant": those take their duration from the effect they apply.
+    recycleSeconds    was `unknown16`, and this file briefly called it `durationSeconds`
+                      because its values are canonical second-counts, uniform within a
+                      category -- 20.0 on every WEAPON power, 30.0 on every STANCE, and one
+                      3600 belonging to `Fortress of Faith`. That reading was wrong, and it
+                      was wrong in a way no amount of internal consistency could catch: a
+                      cooldown is *also* a canonical second-count that clusters by
+                      category. The Morloch wiki settled it. Across the 389 powers named in
+                      both, this field equals the wiki's **Recycle Time** exactly on 322.
+                      `tools/check_powers_wiki.py` is that comparison.
 
-The two that keep a number are the two the evidence does not reach, and they are left that
-way on purpose:
+    requiresHitRoll   was `unknown17`. Matches the wiki's **Requires Hit Roll** on 384 of
+                      389, and the shape of the disagreement matters more than the
+                      percentage: it is never set where the wiki says no. All five
+                      exceptions run the other way, and four are SELF-targeted WEAPON
+                      powers -- Backstab, Shield Bash, Darius' Fist, Sword of Saint Malorn
+                      -- where the roll belongs to the weapon swing rather than the power.
+
+One header slot still has no name, and now has a better claim to keeping its number: it was
+compared against every numeric field the wiki carries and matched none of them.
 
     unknown15   6 values -- 0.0 (788), 1 (568), 0.1 (68), 0.5 (29), 2.4 (8), 5.0 (3). No
-                correlation found with PULSEINFO, STICKY, cast time or category.
-    unknown17   a flag, set on 145 powers. Never on a SELF-targeted one: every power that
-                carries it targets PCMOBILE, PC, MOBILE or BUILDING, and it skews to DAMAGE
-                and STUN. It is *not* resistability -- 110 of the 145 have no resistable
-                action, and 333 powers with one do not carry the flag.
-
-Naming those two on the strength of that would be a guess wearing a label.
+                correlation with PULSEINFO, STICKY, cast time, category, or anything the
+                wiki records.
 
 Damaged records are reported, not repaired
 ------------------------------------------
@@ -102,11 +107,11 @@ from export_animation_table import block_head, cfg_blocks
 HEADER_FIELDS = [
     "code", "name", "kind", "skillId", "skillName", "target", "range", "areaShape",
     "areaRadius", "areaAffects", "costType", "costAmount", "unused12", "unused13",
-    "castSeconds", "unknown15", "durationSeconds", "unknown17", "usableIn",
+    "castSeconds", "unknown15", "recycleSeconds", "requiresHitRoll", "usableIn",
     "animIdA", "animIdB", "targeting",
 ]
 NUMERIC = {"skillId", "range", "areaRadius", "costAmount", "castSeconds",
-           "unused12", "unused13", "unknown15", "durationSeconds", "unknown17",
+           "unused12", "unused13", "unknown15", "recycleSeconds", "requiresHitRoll",
            "animIdA", "animIdB"}
 # Keys whose value is a single quoted sentence shown to the player.
 MESSAGE_KEYS = {
@@ -410,21 +415,33 @@ def main() -> int:
                  "and `effects` is that list flattened. `animIdA`/`animIdB` and "
                  "`loopanimid` are ANIMIDs -- resolve them through animations/resolve.json "
                  "per skeleton. `unused12`/`unused13` are parsed and never vary. "
-                 "`durationSeconds` is 0 on 562 powers, meaning not stated here rather "
-                 "than instant. `unknown15` and `unknown17` are the two header slots the "
-                 "evidence does not name; see headerFieldNotes. Keys other than the header "
-                 "keep the source's own spelling, lowercased."),
+                 "`recycleSeconds` is a cooldown, not a duration, and is 0 on 562 powers "
+                 "meaning not stated here. `unknown15` is the one header slot still "
+                 "unnamed; see headerFieldNotes, which records what each name was checked "
+                 "against. Keys other than the header keep the source's own spelling, "
+                 "lowercased."),
+        "checkedAgainst": ("the Morloch wiki, via tools/check_powers_wiki.py: 389 powers "
+                           "named in both. Recycle Time agrees on 322, Requires Hit Roll "
+                           "on 384, Target and Range on 208 of 232, Stamina Cost on 28 of "
+                           "29. Where the two differ the cache is authoritative -- it is "
+                           "what shipped -- but the disagreements are described rather "
+                           "than dismissed."),
         "headerFieldNotes": {
             "unused12": "0 on all 1,464 well-formed powers.",
             "unused13": "0 on 1,463; one power reads 10.0.",
-            "durationSeconds": ("seconds. Uniform within a category: WEAPON 20.0, STANCE "
-                                "30.0, BUFF 120/300/600 and one 3600. 0 means the duration "
-                                "is not stated here, not that the power is instant."),
-            "unknown15": ("0.0/1/0.1/0.5/2.4/5.0. No correlation found with PULSEINFO, "
-                          "STICKY, cast time or category."),
-            "unknown17": ("flag on 145 powers, never on a SELF-targeted one, skewed to "
-                          "DAMAGE and STUN. Not resistability: 110 of the 145 have no "
-                          "resistable action and 333 powers with one lack the flag."),
+            "recycleSeconds": ("cooldown in seconds, NOT duration. Equals the wiki's "
+                               "Recycle Time exactly on 322 of the 389 powers in both. "
+                               "0 means not stated here."),
+            "unknown15": ("0.0/1/0.1/0.5/2.4/5.0. Matches nothing in the data and nothing "
+                          "the wiki records."),
+            "requiresHitRoll": ("matches the wiki's Requires Hit Roll on 384 of 389, and "
+                                "is never set where the wiki says no. All 5 exceptions run "
+                                "the other way; 4 are SELF-targeted WEAPON powers where "
+                                "the roll belongs to the swing."),
+            "castSeconds": ("the config's own figure. The wiki reports one second more on "
+                            "225 powers -- 215 of them SPELL, 217 MANA-cost -- and agrees "
+                            "exactly on 67, mostly the 0.2 s instant melee ones. Cause "
+                            "unestablished."),
             "animIdA/animIdB": ("both resolve as ANIMIDs and are set with loopanimid on "
                                 "674 powers, 529 of the 560 casting 2s or longer. Which "
                                 "starts the cast and which finishes it is not established."),

@@ -376,13 +376,37 @@ struct slots (`sb.exe` 0x56e410), so every name here is evidenced from the data 
 |---|---|
 | `unused12` | 0 on all 1,464 well-formed powers. Parsed, stored, never varied. |
 | `unused13` | 0 on 1,463; one power reads 10.0. Dead in this build either way. |
-| `durationSeconds` | was `unknown16`. Every non-zero value is a canonical second-duration and is uniform within a category: all 425 WEAPON powers read 20.0, all 13 STANCE read 30.0, BUFF runs 120/300/600, and the single 3600 belongs to *Fortress of Faith*. **0 means "not stated here", not "instant"** — 562 powers take their duration from the effect they apply. |
-| `unknown15` | 0.0 (788), 1 (568), 0.1 (68), 0.5 (29), 2.4 (8), 5.0 (3). No correlation found with PULSEINFO, STICKY, cast time or category. |
-| `unknown17` | a flag on 145 powers, **never on a SELF-targeted one**, skewed to DAMAGE and STUN. It is *not* resistability: 110 of the 145 have no resistable action, and 333 powers that do lack the flag. |
+| `recycleSeconds` | was `unknown16`. **A cooldown, not a duration** — equals the wiki's *Recycle Time* exactly on 322 of the 389 powers named in both. 0 on 562 powers means "not stated here". |
+| `requiresHitRoll` | was `unknown17`. Matches the wiki's *Requires Hit Roll* on 384 of 389, and is never set where the wiki says no. |
+| `unknown15` | 0.0 (788), 1 (568), 0.1 (68), 0.5 (29), 2.4 (8), 5.0 (3). Matches nothing in the data and nothing the wiki records. |
 
-The last two keep a number because the evidence does not reach them, and naming them on
-that basis would be a guess wearing a label. `powers.json` carries all of this as
-`headerFieldNotes` so it travels with the data.
+**Two of these names were fixed by checking against the wiki, and one of them was wrong.**
+`recycleSeconds` shipped briefly as `durationSeconds`, on the reasoning that its values are
+canonical second-counts clustered by category — 20.0 on every WEAPON power, 3600 on
+*Fortress of Faith*. That is equally true of a cooldown, which is what it is. No amount of
+internal consistency was going to catch it; an outside source did, in one pass.
+
+`python tools/check_powers_wiki.py` is that comparison, and it is worth re-running after any
+change to the header names. It reports agreement per field:
+
+| wiki field | ours | agree |
+|---|---|---|
+| Recycle Time | `recycleSeconds` | 322 / 389 |
+| Requires Hit Roll | `requiresHitRoll` | 384 / 389 |
+| Target and Range | `range` | 208 / 232 |
+| Stamina Cost | `costAmount` | 28 / 29 |
+| Mana Cost | `costAmount` | 255 / 348 |
+| Casting Time | `castSeconds` | 67 / 388 |
+
+**Casting time is the interesting disagreement.** The wiki reports exactly one second more
+on 225 powers — 215 of them `SPELL`, 217 MANA-cost — and agrees exactly on 67, mostly the
+0.2 s instant melee ones. A fixed extra second on spells, cause unestablished. The cache is
+what shipped, so `castSeconds` carries the config's own figure; if you are matching player
+recollection of cast times, add the second.
+
+The wiki lists 438 named powers to the cache's 1,163 distinct names, 389 of which appear in
+both. `powers.json` carries all of this as `headerFieldNotes` and `checkedAgainst`, so it
+travels with the data.
 
 `animIdA`/`animIdB` are ANIMIDs that resolve through `animations/resolve.json`; together
 with `loopanimid` they are set on 674 powers, 529 of the 560 that cast for 2 s or more, so
