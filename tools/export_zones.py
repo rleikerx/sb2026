@@ -57,6 +57,40 @@ from assets.cache_archive import CacheArchive
 _UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
+FALLBACK_UNITS_PER_METRE = 2.5994
+
+
+def _find_scale(node):
+    """The units-per-metre figure wherever summary.json happens to nest it."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if isinstance(value, (int, float)) and "metre" in key.lower():
+                return float(value)
+            found = _find_scale(value)
+            if found:
+                return found
+    elif isinstance(node, list):
+        for value in node:
+            found = _find_scale(value)
+            if found:
+                return found
+    return None
+
+
+def units_per_metre(export_root: Path):
+    """(value, source) from reference/summary.json, or the fallback."""
+    summary = export_root / "reference" / "summary.json"
+    if summary.exists():
+        try:
+            data = json.loads(summary.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            data = None
+        found = _find_scale(data)
+        if found:
+            return found, "reference/summary.json"
+    return FALLBACK_UNITS_PER_METRE, "fallback constant"
+
+
 def slugify(name: str) -> str:
     return _UNSAFE.sub("_", (name or "").strip()).strip("_") or "unnamed"
 
@@ -333,9 +367,18 @@ def main() -> None:
         if args.sample and written >= args.sample:
             break
 
+    # **This was hardcoded at 2.903 and was 11.7% wrong.** The metre scale is derived
+    # from a posed model's bounding box and has moved twice -- 2.903, then 2.7411, now
+    # 2.5994 -- so pinning it here meant `zones/index.json` kept shipping the oldest of
+    # the three while `reference/summary.json`, `rules.json` and `terrain/` all carried
+    # the current one. This is the file a world importer reads for scale, so it was the
+    # worst place to leave a stale constant. Read at run time, like the other two tools.
+    per_metre, scale_source = units_per_metre(REPO_ROOT / "export_aegisfall")
+    print(f"unitsPerMetre {per_metre} (from {scale_source})")
     (out / "index.json").write_text(
         json.dumps({"generator": "tools/export_zones.py",
-                    "unitsPerMetre": 2.903,
+                    "unitsPerMetre": per_metre,
+                    "unitsPerMetreSource": scale_source,
                     "zones": index}, indent=1), encoding="utf-8")
 
     write_macrozones(out, Path(args.dump).parent, index)
