@@ -18,6 +18,7 @@ What it emits (mechanical data only - no lore or description prose):
     character_creation.json  what the creation screen actually offers, per the client
     starting_kits.json  what each race/sex/class combination starts the game holding
     guild_ranks.json  the 21 guild charters and their rank ladders
+    guild_rules.json  guild standing benefits, governments and their laws
     deeds.json        the 880 buildable deeds: price, what they place, start rank
     structures.json   buildings: rank progression, health, and the mesh that
                       renders each rank
@@ -672,6 +673,81 @@ def main() -> int:
                  else "; NUMRANKS matches the rung count on every one")
               + "; no charter deed: " + str(no_deed))
 
+    # --- guild rules ---------------------------------------------------------------------
+    #
+    # `Config/GuildServerConfig.cfg`. Mostly scalars, and the interesting ones are triples
+    # the file labels itself: `# [Sovereign] [Sworn] [Errant]` over `XPBONUS= 100 80 0`.
+    # Those are the mechanical benefits of guild standing -- a sworn guild's members
+    # recover health at 180 where a sovereign guild's recover at 200 and an errant guild
+    # gets nothing -- and they are not derivable from anywhere else in this export.
+    #
+    # It also ends with a "listing of valid UIDs": 12 `MASTER_RACE` and 26 `MASTER_CLASS`
+    # entries. Those match the 12 races flagged `standard_creation` and `classes.json`
+    # minus `Pet` **exactly, both ways**, which is a fourth independent source for the
+    # playable vocabulary and an independent confirmation that excluding `Pet` from the
+    # class universe -- a judgement call made while fixing the `restrict` flag -- was right.
+    STATUS_TRIPLE = ("HEALTHRECOVER", "MANARECOVER", "XPBONUS", "RECALLOPERATION",
+                     "DEATHLOSS")
+    MINUTES_DAYS = ("BALLEXPIRE", "CRESTRESERVE", "BANISHEXPIRE", "QUITEXPIRE")
+    guild_rules: Dict[str, Any] = {}
+    rules_cfg = config_dir / "GuildServerConfig.cfg"
+    if rules_cfg.exists():
+        text = rules_cfg.read_text(encoding="latin-1", errors="ignore")
+        scalars: Dict[str, Any] = {}
+        for key, value in _re.findall(r"^\s*([A-Z_]+)=\s*([^\n#]*)", text, _re.M):
+            value = value.strip()
+            if key.startswith("MASTER_") or key in ("GOVERNMENT", "ACTION",
+                                                    "GOV_LAW_ID", "ALLOWED_STATUS"):
+                continue
+            if value.startswith('"'):
+                scalars[key] = value.strip('"')
+                continue
+            numbers = [float(n) if "." in n else int(n)
+                       for n in _re.findall(r"-?\d+(?:\.\d+)?", value)]
+            if not numbers:
+                continue
+            if key in STATUS_TRIPLE and len(numbers) == 3:
+                scalars[key] = dict(zip(("sovereign", "sworn", "errant"), numbers))
+            elif key in MINUTES_DAYS and len(numbers) == 2:
+                scalars[key] = {"minutes": numbers[0], "days": numbers[1]}
+            else:
+                scalars[key] = numbers[0] if len(numbers) == 1 else numbers
+
+        governments = []
+        for block in _re.findall(r"<BEGIN_GOV_SYSTEM>(.*?)<END_GOV_SYSTEM>", text, _re.S):
+            name = _re.search(r"GOVERNMENT=\s*(\S+)", block)
+            governments.append({
+                "government": name.group(1) if name else None,
+                "actions": [{"action": a, "law": law} for a, law in
+                            _re.findall(r'ACTION=\s*(\S+)\s+"([^"]*)"', block)],
+            })
+        laws = []
+        for kind, block in _re.findall(
+                r"<BEGIN_GOV_LAW>\s*(\S+)(.*?)<END_GOV_LAW>", text, _re.S):
+            found = _re.search(r'GOV_LAW_ID=\s*"([^"]*)"', block)
+            laws.append({
+                "id": found.group(1) if found else None,
+                "kind": kind,
+                "allowed_status": [s for s, flag in
+                                   _re.findall(r"ALLOWED_STATUS=\s*(\S+)\s+(\S+)", block)
+                                   if flag.upper() == "TRUE"],
+            })
+        guild_rules = {
+            "settings": scalars,
+            "governments": governments,
+            "laws": laws,
+            "master_races": _re.findall(r'MASTER_RACE=\s*"([^"]*)"', text),
+            "master_classes": _re.findall(r'MASTER_CLASS=\s*"([^"]*)"', text),
+        }
+        playable_set = {r for r, v in races.items() if v.get("standard_creation")}
+        class_set = {c["name"] for c in classes if c["name"] != "Pet"}
+        print("guild rules: " + str(len(scalars)) + " settings, "
+              + str(len(governments)) + " governments, " + str(len(laws)) + " laws; "
+              + "MASTER_RACE matches standard_creation: "
+              + str(set(guild_rules["master_races"]) == playable_set)
+              + ", MASTER_CLASS matches classes minus Pet: "
+              + str(set(guild_rules["master_classes"]) == class_set))
+
     tables = {
         "races.json": sorted(races.values(), key=lambda r: r["race"]),
         "classes.json": sorted(classes, key=lambda r: r["name"]),
@@ -683,6 +759,7 @@ def main() -> int:
         "character_creation.json": creation,
         "starting_kits.json": kits,
         "guild_ranks.json": guild_ranks,
+        "guild_rules.json": guild_rules,
     }
     corrected = [s for s in structures if "architecture_shipped" in s]
     if corrected:
