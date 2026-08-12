@@ -319,7 +319,7 @@ convenience."* This is that same mechanical data read out of the shipped client.
 | `classes.json` | 27 | attribute adjustments, granted skills, skill adjustments, eligible races |
 | `disciplines.json` | 48 | requirements and grants |
 | `talents.json` | 240 | requirements and grants |
-| `items.json` | 4,021 | equip slot, weight, value, damage, level/rank requirements, race/class restrictions |
+| `items.json` | 4,021 | equip slot, weight, value, **damage**, weapon speed and range, level/rank requirements, race/class restrictions |
 | `structures.json` | 1,062 | rank progression, health per rank, building per rank |
 | `powers.json` | 1,465 | cost, target, area, cast time, prerequisites, the ACTION chain, and every message string |
 | `effects.json` | 2,950 | what a power *does*: mods, conditions, animation overrides, and who applies it |
@@ -334,6 +334,37 @@ worth understanding before overwriting anything.
 
 `items.json` carries equip slots, which is the field that lines up with the
 `EquipSlot` values `@aegisfall/sim` already stores per character.
+
+### items.json shipped an empty damage column, and the wiki is how it was found
+
+**Re-take `items.json` if you have an older copy.** It advertised `damage` and shipped
+`[null, null]` on **all 4,021 rows**. `export_content.py` was reading `item_min_damage` and
+`item_max_damage`, which are not fields any item has — the real numbers sit in a nested
+`item_weapon` record as `weapon_damage`, a list of `{damage_type, damage_min, damage_max}`.
+**785 of the 811 weapons now carry damage**, with the type on each entry (SLASHING 291,
+CRUSHING 252, PIERCING 212, and a tail of BLEEDING, POISON, SIEGE, COLD, FIRE, MENTAL,
+LIGHTNING, HOLY). The same record yielded `weapon.speed` and `weapon.maxRange`, which were
+also being dropped.
+
+Nothing internal could have caught this. An always-null column is perfectly self-consistent,
+passes every completeness check, and reads as "this cache does not record damage". It took
+an outside source quoting `8 - 34` for a weapon this export had nothing for.
+
+`python tools/check_items_wiki.py` is that comparison, over the 264 pages in the wiki's
+`Category:Weapons`, 229 of which name an item we have:
+
+| field | compared | exact |
+|---|---:|---:|
+| damage min | 206 | 102 |
+| damage max | 206 | 97 |
+| weight | 221 | 130 |
+| attack speed | 202 | 86 |
+
+**Read the exact-match count as a floor, not a score.** Roughly half of each field matches
+and the rest differs with *no single scale factor* — the wiki-to-cache ratio is 1.0 far more
+often than anything else and the remainder is scattered. That is patch drift, the wiki
+documenting a different build. A genuinely wrong field agrees ~0% of the time, which is
+precisely what this reported before the fix.
 
 One decoding note for anyone reading the raw records: attribute deltas are
 stored unsigned, so −10 arrives as `4294967286`. The exporter converts these.

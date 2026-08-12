@@ -180,7 +180,26 @@ def main() -> int:
             "equip_slots": [s for s in (f.get("item_eq_slots_or") or []) if s != "NONE"],
             "weight": f.get("item_wt"),
             "value": f.get("item_value"),
-            "damage": [f.get("item_min_damage"), f.get("item_max_damage")],
+            # Damage and the weapon numbers live in a nested `item_weapon` record, not on
+            # the item. This used to read `item_min_damage`/`item_max_damage`, which are
+            # not fields any item has, so every one of the 4,021 rows shipped
+            # `damage: [null, null]` -- an advertised column that was empty end to end. It
+            # was found by comparing against the Morloch wiki, which quotes a damage range
+            # for weapons this export had none for.
+            #
+            # Kept as a list because the source is one, with the type on each entry: 785 of
+            # the 811 weapons carry exactly one, and no item in this cache carries two.
+            "damage": [
+                {"type": d.get("damage_type"),
+                 "min": d.get("damage_min"),
+                 "max": d.get("damage_max")}
+                for d in ((f.get("item_weapon") or {}).get("weapon_damage") or [])
+            ],
+            "weapon": ({"speed": weapon.get("weapon_wepspeed"),
+                        "maxRange": weapon.get("weapon_max_range"),
+                        "projectileId": weapon.get("weapon_projectile_id") or None,
+                        "projectileSpeed": weapon.get("weapon_projectile_speed") or None}
+                       if (weapon := f.get("item_weapon")) else None),
             "level_req": f.get("item_level_req"),
             "rank_req": f.get("item_rank_req"),
             "skill_used": f.get("item_skill_used"),
