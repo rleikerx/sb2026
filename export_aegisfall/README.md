@@ -355,6 +355,28 @@ and both now handled in the tool: four pages write the attribute as a wiki link 
 [[Strength]]`), which reported 0/5 for those races; and the wiki wraps long class lists with
 `<br>`, which read as a `<br> Prelate` entry and held the class match at 154/167.
 
+### classes.json agrees too, and from the other direction
+
+`python tools/check_classes_wiki.py`, over the 26 pages in `Category:Class`:
+
+| | |
+|---|---|
+| base-class links | **31 / 31** |
+| eligible races | **99 / 99** |
+| granted skills | **69 / 69** |
+
+This is not a restatement of the race check. That one validates **race → class** from the
+race pages; this validates **class → race** from the class pages. The same relation read
+from opposite ends, agreeing both ways.
+
+`classes.json` carries 27 rows to the wiki's 26 — the extra is `Pet`, a rune type rather
+than a player class, so it is expected rather than a discrepancy.
+
+A third parser trap here, and the best one: **`Wear Armor, Medium` is a single skill whose
+name contains a comma.** Splitting the wiki's comma-separated skill list cuts it into
+`Wear Armor` and `Medium`, neither of which matches anything, and it reported 64/74. The
+cache had it right throughout.
+
 `items.json` carries equip slots, which is the field that lines up with the
 `EquipSlot` values `@aegisfall/sim` already stores per character.
 
