@@ -39,6 +39,7 @@ some numbers you may already have baked are wrong rather than merely stale.
 | `content/disciplines.json`, `talents.json` | race/class requirements were **inverted**; six new columns — see below |
 | `content/powers.json` | gains an `actions` table, without which 19 rune effects are unreachable |
 | `content/deeds.json` | **new** — 880 deeds with the builder's price, an asset kind nothing read |
+| `content/items.json` | ten more columns — **armour had no defense rating**, and 1,030 items no sex restriction |
 
 ### Take these — they are new
 
@@ -323,7 +324,7 @@ convenience."* This is that same mechanical data read out of the shipped client.
 | `classes.json` | 27 | attribute adjustments, granted skills, skill adjustments, eligible races |
 | `disciplines.json` | 48 | requirements, granted powers, rune category |
 | `talents.json` | 240 | requirements and grants, **which are player-selectable**, rune category, attribute floors, applied effects |
-| `items.json` | 4,021 | equip slot, weight, value, **damage**, weapon speed and range, level/rank requirements, race/class restrictions |
+| `items.json` | 4,021 | equip slot, weight, value, **damage**, **defense rating**, durability, bulk, weapon speed and range, skill/level/rank requirements, race/class/discipline/**sex** restrictions, resistances, female mesh |
 | `deeds.json` | 880 | **new** — the builder's price, what each deed places, start rank, employment |
 | `structures.json` | 1,062 | **two record types**: 294 buildable templates with a rank ladder, architecture, city radii and NPC slots; 768 named structures with floors, levels and doors. See below |
 | `powers.json` | 1,465 | cost, target, area, cast time, prerequisites, the ACTION chain, and every message string |
@@ -576,6 +577,43 @@ and the rest differs with *no single scale factor* — the wiki-to-cache ratio i
 often than anything else and the remainder is scattered. That is patch drift, the wiki
 documenting a different build. A genuinely wrong field agrees ~0% of the time, which is
 precisely what this reported before the fix.
+
+### The armour had no armour — ten more item columns
+
+**Re-take `items.json` again.** A sweep of every raw field against what the exporter
+actually read turned up the same defect as `damage`, on the other half of the equipment
+table: **2,361 rows are ARMOR and none carried a protection value.** `item_defense_rating`
+sits on 1,574 of them and was never read. A weapon table with no damage and an armour table
+with no armour are the same bug; only the first had been found, because the wiki check
+covered `Category:Weapons` and nothing else.
+
+| new column | on | what it is |
+|---|---:|---|
+| `defense_rating` | 1,574 | **the armour value.** Robe of the Crimson Circle is 110 |
+| `durability` | 2,505 | `item_health_full` — see the note below |
+| `bulk_factor` | 1,014 | encumbrance, armour only |
+| `skill_requirements` | 1,538 | the skill needed to use it — `[{skill: "Axe", level: 0}]` |
+| `sex_req` | **1,030** | 942 female, 88 male. An equip restriction nothing recorded |
+| `render_object_female` | 1,380 | **a different mesh on a female body.** Binding the male mesh to a female skeleton is a visible error |
+| `resistances` | 1,025 | SLASHING/CRUSHING/PIERCING; zero entries dropped |
+| `eligible_disciplines` | 75 | restrict-aware, same semantics as races and classes |
+| `sheathable` | 928 | |
+| `parry_anim_id` | 4,021 | an ANIMID — resolve through `animations/resolve.json` |
+
+`durability` is worth a separate word. `check_items_wiki.py` has parsed the wiki's
+`Durability:` since the day it was written and never compared it, because there was no
+column to compare it against — read, discarded, counted zero times, on every run. It now
+compares on 221 weapons and 49 armour pieces.
+
+`python tools/check_items_wiki.py` now covers `Category:Armor` as well: 751 wiki rows, 49
+naming an item we have, with defense 33/49, durability 35/49 and weight 37/49 exact. Read
+those as a floor, same as the weapon numbers — the remainder is scattered with no single
+scale factor, which is patch drift rather than a decoding error.
+
+**PROP, LIGHT and OTHER were swept too and have nothing.** All 1,575 props populate 14
+fields between them and every one is engine plumbing — render object, scale, cull distance,
+collision, sound. There is no content hiding in them; what a prop is for lives in
+`zones/` (where it is placed) and `models/` (what it looks like).
 
 One decoding note for anyone reading the raw records: attribute deltas are
 stored unsigned, so −10 arrives as `4294967286`. The exporter converts these.
