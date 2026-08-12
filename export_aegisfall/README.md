@@ -456,14 +456,33 @@ Neither implies the other — **if you are asking "can this be garrisoned", read
 
 The archers go in the towers, which is where you would put them.
 
-**One oddity remains in the data, unchanged and unaltered.** Templates 2000192/3/4 — the
-Irekei gate, stair and straight-wall pieces — carry `architecture: ["Feudal"]` where the
-Elven (2000209/11/12) and Invorri (2000227/8/9) equivalents carry their own style. It no
-longer shows as a wiki disagreement, because the Irekei *towers* (2000195/6) are tagged
-`Irekei` and belong to the same wall section, so the set as a whole is available to Irekei.
-The narrow fact still matters if you group buildings by this field: **three Irekei wall
-pieces will sort under Feudal.** Nothing in the export was changed to produce the
-agreement.
+### The one place this export departs from the cache
+
+Templates **2000192, 2000193 and 2000194** — the Irekei outer-wall gate, stair and
+straight-wall pieces — ship tagged `["Feudal"]`, where the Elven (2000209/11/12) and
+Invorri (2000227/8/9) equivalents each carry their own style. **This export corrects them
+to `["Irekei"]`.** Three independent things say Irekei:
+
+- the structures they build are ids **1309200–1310000, one contiguous Irekei block** whose
+  other members are named `Irekei Outer Wall Gate`, `Irekei Outer Wall with Stairs`,
+  `Irekei Outer Straight Wall`. The unprefixed names inside that block are Irekei assets
+  that were never renamed, not Feudal ones;
+- templates **2000195/2000196, the Irekei towers**, sit in the same contiguous template
+  block with the same dual-name shape and are tagged `Irekei`;
+- the wiki lists Irekei Outer Walls as ordinary Irekei buildings.
+
+**`architecture_shipped` carries the cache's original value on exactly those three rows**,
+and appears nowhere else. If you want the raw client data, read that field where it exists;
+if you want the corrected value, read `architecture`. Deleting `ARCHITECTURE_CORRECTIONS`
+in `tools/export_content.py` reverts the export to verbatim.
+
+The wall **caps** are deliberately left alone. They are tagged Feudal in *every* style —
+including 2000207/2000208, which build structures actually named `Elven Outer Wall Cap` —
+so that is a uniform rule rather than an anomaly, and not something to overturn.
+
+`check_structures_wiki.py` **scores against `architecture_shipped`**, not the correction,
+and prints the overridden rows above its table. Checking our own edit against the wiki that
+motivated it would turn an edit into evidence; the 44/44 describes the client's data.
 
 ### `architecture` is a zone-placement tag, not a style label
 
