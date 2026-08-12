@@ -22,6 +22,15 @@ consistency.
 The wiki is a small community site. Pages come through the MediaWiki API in batches of 20
 with a pause between calls -- about 30 requests for the whole comparison rather than one
 per power -- and the fetch is cached so a re-run costs nothing.
+
+There is no equivalent check for `effects.json`, and that is a property of the source
+rather than an omission here. The wiki has no per-effect pages: its `Category:Powers` holds
+class lists plus seven mechanics pages (Buff, Stun, Summon, Tracking, Invisibility, Skill,
+Traveling Stance), and the `Effect(s)` field appears on five powers in total, carrying prose
+about stacking rather than anything joinable. The 2,950 effects are checked instead against
+their own source -- `tools/export_powers.py` accounts for every content line of
+Effects.cfg -- and indirectly here, since the power fields these comparisons validate are
+the ones the power-to-effect join is built on.
 """
 
 from __future__ import annotations
@@ -166,6 +175,56 @@ def main() -> int:
             pct = 100 * agree / total
             print(f"{wiki_key:<15}{our_key:<17}{total:>6}{agree:>7}{dis:>8}  "
                   f"{pct:.0f}%  {'; '.join(examples)}")
+
+    # --- fields whose values are tokens rather than numbers -------------------------
+    def token_check(wiki_key, test):
+        ok = bad = 0
+        for _n, w, ours in matched:
+            if wiki_key not in w:
+                continue
+            verdict = test(w[wiki_key], ours)
+            if verdict is None:
+                continue
+            ok += bool(verdict)
+            bad += not verdict
+        if ok + bad:
+            print(f"{wiki_key:<15}{'(token)':<17}{ok+bad:>6}{ok:>7}{bad:>8}  "
+                  f"{100*ok/(ok+bad):.0f}%")
+
+    print()
+    token_check("Power Type",
+                lambda t, o: t.strip().upper().startswith((o.get("kind") or "")[:5]))
+    token_check("Focus Skill",
+                lambda t, o: ((o["skillName"].lower() in t.lower())
+                              if o.get("skillName") not in (None, "", "None", "Unknown")
+                              else None))
+    token_check("Target and Range",
+                lambda t, o: ((o.get("target") or "").lower()
+                              in t.lower().replace("mobile", "pcmobile")) or None)
+
+    # --- Area of Effect, which the wiki uses for two different quantities ------------
+    #
+    # Read as a radius throughout it agrees on only 39%, which looks like a defect in this
+    # export and is not one: on a power whose areaShape is NONE the wiki is quoting the
+    # *range* under that heading. Split by shape, 74 of 93 land exactly, and the remainder
+    # is ordinary drift between the wiki's patch and this cache (it says 32 where the cache
+    # says 30). Both `areaRadius` and `range` come out validated.
+    hits = Counter()
+    for _n, w, ours in matched:
+        if "Area of Effect" not in w:
+            continue
+        stated = number(w["Area of Effect"])
+        if stated is None:
+            continue
+        shape = ours.get("areaShape")
+        field = "areaRadius" if shape and shape != "NONE" else "range"
+        value = ours.get(field)
+        hits[(field, isinstance(value, (int, float)) and abs(stated - value) < 0.51)] += 1
+    agree = sum(c for k, c in hits.items() if k[1])
+    total = sum(hits.values()) or 1
+    print(f"{'Area of Effect':<15}{'radius or range':<17}{total:>6}{agree:>7}"
+          f"{total-agree:>8}  {100*agree/total:.0f}%   "
+          f"(radius when areaShape is set, range when it is NONE)")
 
     table = Counter()
     for name, w, ours in matched:

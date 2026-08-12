@@ -391,12 +391,22 @@ change to the header names. It reports agreement per field:
 
 | wiki field | ours | agree |
 |---|---|---|
-| Recycle Time | `recycleSeconds` | 322 / 389 |
+| Target and Range | `target` | **140 / 140** |
 | Requires Hit Roll | `requiresHitRoll` | 384 / 389 |
+| Power Type | `kind` | 376 / 382 |
+| Focus Skill | `skillName` | 339 / 353 |
+| Recycle Time | `recycleSeconds` | 322 / 389 |
 | Target and Range | `range` | 208 / 232 |
+| Area of Effect | `areaRadius` or `range` | 74 / 93 |
 | Stamina Cost | `costAmount` | 28 / 29 |
 | Mana Cost | `costAmount` | 255 / 348 |
 | Casting Time | `castSeconds` | 67 / 388 |
+
+**`Area of Effect` looks like a failure and is not one.** Read as a radius throughout it
+agrees on 39%. The wiki uses that heading for two different quantities: on a power whose
+`areaShape` is `NONE` it is quoting the *range*. Split by shape it lands exactly on 74 of
+93, and the remainder is drift between the wiki's patch and this cache — it says 32 where
+the cache says 30. Both `areaRadius` and `range` come out validated.
 
 **Casting time is the interesting disagreement.** The wiki reports exactly one second more
 on 225 powers — 215 of them `SPELL`, 217 MANA-cost — and agrees exactly on 67, mostly the
@@ -407,6 +417,15 @@ recollection of cast times, add the second.
 The wiki lists 438 named powers to the cache's 1,163 distinct names, 389 of which appear in
 both. `powers.json` carries all of this as `headerFieldNotes` and `checkedAgainst`, so it
 travels with the data.
+
+**`effects.json` has no equivalent check, and that is the source's doing rather than an
+omission.** The wiki has no per-effect pages: `Category:Powers` holds the class lists plus
+seven mechanics pages (Buff, Stun, Summon, Tracking, Invisibility, Skill, Traveling
+Stance), and its `Effect(s)` field appears on **five** powers in total, carrying prose about
+stacking rather than anything joinable. The 2,950 effects are checked against their own
+source instead — `export_powers.py` accounts for every one of Effects.cfg's 13,427 content
+lines — and indirectly by the table above, since those power fields are what the
+power-to-effect join is built on.
 
 `animIdA`/`animIdB` are ANIMIDs that resolve through `animations/resolve.json`; together
 with `loopanimid` they are set on 674 powers, 529 of the 560 that cast for 2 s or more, so
