@@ -43,8 +43,17 @@ Those are excluded from the architecture check for that reason -- the wiki group
 under Trainer Buildings, which is not an architecture at all.
 
 `Hirelings` is compared as presence rather than by name: the wiki names the NPC types a
-building accepts (`Guard Captain`, `Banker`) where the cache stores a per-rank *count*.
-Agreement here means both sources agree the building takes hirelings at all.
+building accepts (`Guard Captain`, `Banker`) where the cache stores them as category ids.
+Agreement means both sources agree the building takes hirelings at all.
+
+Two cache fields carry that, and reading only one of them is what made the wall families
+look empty for a whole pass. `valid_npc_categories` is which NPC classes may be stationed
+-- **category 27 is the wall-tower and gatehouse slot**, on `Concave Tower`, `Convex
+Tower`, `Outer Wall with Tower` and `Gate House` in all four styles, and **category 28 is
+`Artillery Tower`**. Between them they are exactly the wiki's `Archer Captain, Wall Archer,
+Tower Artillery Captain`. `ranks[].hirelings` is a separate per-rank *count*, which reads 0
+on every one of those towers and 1-4 on buildings carrying no NPC category at all. Neither
+implies the other; `takes_npc` accepts either.
 
 `Cost` **is** checkable, and an earlier version of this file said it was not. The reasoning
 was that `items.json` holds three generic deed rows, all value 0 or 1, so prices had to be
@@ -63,38 +72,31 @@ mapping between them would manufacture agreement rather than test for it.
 
 The score
 ---------
-All 52 sections match a template, and 154 of 159 comparable fields agree: architecture
-43/44, `not rankable` 11/11, hirelings 48/52, **cost 52/52**. The cost column is the
-strongest single result in any of these comparisons -- 52 prices from 1,500,000 down to
-50,000, read out of a different asset kind than the buildings themselves, matching a
-player-written table exactly.
+All 52 sections match a template and **159 of 159 comparable fields agree**: architecture
+44/44, `not rankable` 11/11, hirelings 52/52, cost 52/52.
 
-**Every one of the five disagreements is a wall**, in two groups, and both look like
-properties of the cache rather than of this comparison.
+The cost column is the strongest single result in any of these comparisons -- 52 prices
+from 1,500,000 down to 50,000, read out of a different asset kind than the buildings
+themselves, joined by name alone, matching a player-written table exactly.
 
-  * `Irekei Outer Walls` is tagged `Feudal`. Templates 2000192/3/4 build the Irekei gate,
-    stair and straight-wall pieces and carry `architecture: ["Feudal"]`, where the Elven
-    (2000209/11/12) and Invorri (2000227/8/9) equivalents carry their own style. It is not
-    that walls go untagged: **2000195 and 2000196, the Irekei towers, sit in the same
-    contiguous id block, have the same dual-name shape, and are tagged `Irekei`.** Wall
-    *caps* are Feudal in all three styles, which does look deliberate -- they are shared
-    geometry, and the Invorri block's caps even build the unprefixed `Outer Wall Cap`
-    structures.
+One honest note about how the last two disagreements went away, because "it agrees now" is
+worth less than knowing why.
 
-    Left as the cache has it. Since the tag is a placement filter and the playable zones
-    permit Feudal almost everywhere, the consequence is that those three appear under the
-    Feudal list rather than the Irekei one -- an inconsistency with the block around them,
-    not a building that cannot be placed. Overwriting it would put invented data into an
-    export whose whole value is being what shipped.
-  * **No wall template allows a hireling at any rank.** The wiki gives all four wall
-    families `Archer Captain, Wall Archer, Tower Artillery Captain`; every wall template
-    here reads `-1` at every rank, including the `Outer Wall with Tower` pieces, which
-    reach `0` and no higher. If the wiki is right, wall garrisons are assigned
-    server-side rather than capped by the template.
+Both were walls, and both were this comparison's fault rather than the cache's. The
+hirelings one is described above: the NPC slot is on the tower and gatehouse pieces, in a
+field this check was not reading. Fixing that required widening the wall family to include
+towers -- which is what the wiki's section describes anyway, since it garrisons the set
+with a `Tower Artillery Captain` and prices it as one 50k system.
 
-Both are reported rather than absorbed. The cache is authoritative -- it is what shipped --
-but a disagreement is worth stating precisely enough that someone with a running server
-can settle it.
+**That widening is also why the architecture column went from 43/44 to 44/44, and the
+underlying oddity it was flagging has not changed.** Templates 2000192/3/4, which build the
+Irekei gate, stair and straight-wall pieces, still carry `architecture: ["Feudal"]` where
+the Elven (2000209/11/12) and Invorri (2000227/8/9) equivalents carry their own style. What
+changed is that the Irekei *towers*, 2000195 and 2000196, are tagged `Irekei` and are now
+inside the family, so the section as a whole is available to Irekei and the wiki is not
+contradicted. The narrower fact stands and is worth knowing if you group buildings by this
+field: three Irekei wall pieces will sort under Feudal. Nothing in the export was altered
+to produce the agreement.
 
     python tools/check_structures_wiki.py
 """
@@ -206,6 +208,26 @@ def row_field(body: str, label: str) -> Optional[str]:
     return found.group(1).strip() if found else None
 
 
+def takes_npc(template: dict) -> bool:
+    """
+    Does this building accept a hireling, by either of the two things the cache records?
+
+    They are different quantities and reading only one of them is what made the wall
+    families look empty. `valid_npc_categories` is **which NPC classes may be stationed
+    here** -- category 27 is the wall-tower and gatehouse slot, carried by `Concave
+    Tower`, `Convex Tower`, `Outer Wall with Tower` and `Gate House` in all four styles;
+    category 28 is `Artillery Tower`. Between them they are precisely the wiki's `Archer
+    Captain, Wall Archer, Tower Artillery Captain`.
+
+    `ranks[].hirelings` is a per-rank *count*, and it is 0 on every one of those towers
+    while reading 1-4 on buildings that carry no NPC category at all. Neither field
+    implies the other, so a building takes hirelings if it has either.
+    """
+    if template.get("valid_npc_categories") or template.get("valid_npc_types"):
+        return True
+    return any(r.get("hirelings", 0) > 0 for r in template.get("ranks") or [])
+
+
 def money(value: Optional[str]) -> Optional[int]:
     """`750k` -> 750000, `1.5m` -> 1500000."""
     found = re.match(r"([\d.]+)\s*([kmKM])?", (value or "").strip())
@@ -271,7 +293,14 @@ def main() -> int:
             prefix = WALL_STYLE_PREFIX.get(style or "", "")
             for name, found_rows in by_building.items():
                 lowered = name.lower()
-                if "outer" not in lowered or "wall" not in lowered:
+                # The wiki's `Outer Walls` section covers the whole wall *system*, and
+                # says so -- it prices the set at 50k and garrisons it with archers. The
+                # towers and gatehouses are part of that system and are the only pieces
+                # that take an NPC, so a family that stops at "outer wall" in the name
+                # excludes exactly the pieces the Hirelings column is about.
+                wall = "outer" in lowered and "wall" in lowered
+                tower = "tower" in lowered or "gate house" in lowered
+                if not (wall or tower):
                     continue
                 # Feudal's wall pieces are the ones carrying no style prefix at all.
                 styled = name.split()[0] in WALL_STYLE_PREFIX.values() and name.split()[0]
@@ -315,11 +344,11 @@ def main() -> int:
 
         hirelings = (row_field(body, "Hirelings") or "").strip(" -")
         if hirelings:
-            ok = any(any(r.get("hirelings", 0) > 0 for r in t.get("ranks") or [])
-                     for t in templates)
+            ok = any(takes_npc(t) for t in templates)
             line += verdict("hire", ok)
             if not ok:
-                misses.append(f"{title} hirelings: wiki {hirelings!r} ours none on any rank")
+                misses.append(f"{title} hirelings: wiki {hirelings!r} ours no NPC slot "
+                              f"and no rank hireling count")
         else:
             line += f"{'-':>6}"
 
