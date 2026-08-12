@@ -43,6 +43,7 @@ some numbers you may already have baked are wrong rather than merely stale.
 | `content/character_creation.json` | **new** — what the creation screen actually offers, incl. two dev runes it does not |
 | `zones/macrozones.json` | **new** — 135 zones with continent and level band; zone→continent was never open |
 | `content/enchantments.json` | **new** — 524 item prefixes/suffixes with reagent costs; explains the `ITEM-A`/`ITEM-B` effects |
+| `content/starting_kits.json` | **new** — 68 race/sex/class blocks, 451 starting loadouts |
 
 ### Take these — they are new
 
@@ -331,6 +332,7 @@ convenience."* This is that same mechanical data read out of the shipped client.
 | `deeds.json` | 880 | **new** — the builder's price, what each deed places, start rank, employment |
 | `character_creation.json` | 132 | **new** — the client's own creation lists: 22 race runes with sex, 4 classes, 22 promotions, 84 traits |
 | `enchantments.json` | 524 | **new** — reagent cost, added value and mods for every item prefix and suffix |
+| `starting_kits.json` | 68 | **new** — 451 loadouts: what each race/sex/class combination starts holding |
 | `structures.json` | 1,062 | **two record types**: 294 buildable templates with a rank ladder, architecture, city radii and NPC slots; 768 named structures with floors, levels and doors. See below |
 | `powers.json` | 1,465 | cost, target, area, cast time, prerequisites, the ACTION chain, and every message string |
 | `effects.json` | 2,950 | what a power *does*: mods, conditions, animation overrides, and who applies it |
@@ -610,6 +612,32 @@ duplicate pair is real is a better answer than either alone.
 **If you are building a creation screen, drive it from this file, not from
 `standard_creation`.** Three race variants are likewise flagged but not offered
 (Half-Giant 2019, Human 253000/253001, all male body variants).
+
+### starting_kits.json — what a new character is handed
+
+**New.** `Config/StartingKitTable.cfg`: **68 race/sex/class blocks, 451 loadouts.** Each
+block is one combination a player can roll, and each loadout is a weapon style it may start
+with, plus the clothes and gear that come with it. Human male Fighter starting `1H Sword`
+gets *Tan Leather Breeches, Belted Tunic, Tan Cuffed Boots, Small Shield, Flimsy Sword*.
+
+All 46 distinct item ids resolve against `items.json`. Every loadout is labelled. Nothing
+is left over in either direction.
+
+**The columns in the source are not reliably positional and this export does not treat them
+as such.** The file's own header reads `Legs Torso Feet Hand Weapon Inv1 Inv2 Inv3`, and
+most rows honour it — but a `Bow` row puts the bow in the fourth column and leaves the rest
+blank. Each id is resolved instead, and the item's own `equip_slots` says where it goes,
+which is data already in the export and cannot drift out of step with it.
+
+**Three files now agree about character creation, and they were written independently:**
+
+| claim | sources that agree |
+|---|---|
+| which 22 race/sex combinations exist | `CharCreateRuneList.cfg`, `StartingKitTable.cfg`, and the race runes' own `variants` — **22, 22, and no leftovers either way** |
+| which classes a race may take | `races.json`'s cross-link and all 68 kit blocks — every kit is for a class that race can actually take |
+
+That is worth more than any single file being tidy. If you are building a creation flow,
+`character_creation.json` says what may be chosen and this says what the choice hands you.
 
 ### The armour had no armour — ten more item columns
 
@@ -1483,7 +1511,7 @@ have to find them again:
 | file | bytes | what it holds |
 |---|---:|---|
 | ~~`PowActionCostInfo.cfg`~~ | 47,675 | **now exported** as `content/enchantments.json` — see below |
-| `StartingKitTable.cfg` | 20,092 | what a new character is given |
+| ~~`StartingKitTable.cfg`~~ | 20,092 | **now exported** as `content/starting_kits.json` — see above |
 | `Ranks_*.cfg` | ~20 files | guild rank titles per charter type |
 | `GuildGovConfig.cfg`, `GuildServerConfig.cfg`, `Guild_Restrictions.*` | ~11 KB | guild government rules and per-server restrictions |
 
