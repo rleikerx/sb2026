@@ -87,6 +87,16 @@ def allowed(requirement, key: str, universe) -> Optional[List[str]]:
     return [u for u in universe if u not in excluded]
 
 
+def category_name(value) -> Optional[str]:
+    """`rune_sub_type` as a name, or None when it is a hash or absent."""
+    return (clean(value) or None) if isinstance(value, str) else None
+
+
+def category_hash(value) -> Optional[int]:
+    """`rune_sub_type` as a hash, for the 15 talents whose name did not resolve."""
+    return value if isinstance(value, int) and value else None
+
+
 def attr_map(entries) -> Dict[str, int]:
     """[{attr_type, attr_value}] -> {stat: value}, ordered like the stat sheet."""
     out: Dict[str, int] = {}
@@ -181,6 +191,35 @@ def main() -> int:
                 "_class_req": fields.get("item_class_req"),
                 "level_req": fields.get("item_level_req"),
                 "pracs_per_level": fields.get("rune_pracs_per_level"),
+                # Which of the 240 talents a player may actually pick at creation. 92
+                # are flagged; the other 148 are NPC runes (`Archer Mob`, `Belgosch
+                # Lord`) that sit in the same table and are not selectable.
+                "standard_creation": bool(
+                    fields.get("rune_is_standard_character_creation")),
+                # The mutual-exclusion group -- the wiki's "Rune Category". Two runes
+                # sharing one are alternatives: only one `Blood Gift` may be taken.
+                # 15 talents store an unresolved string hash here instead of a name;
+                # those keep the hash in `rune_category_hash` rather than losing it,
+                # and it resolves against no string this export or the client's own
+                # hash table contains.
+                "rune_category": category_name(fields.get("rune_sub_type")),
+                "rune_category_hash": category_hash(fields.get("rune_sub_type")),
+                "rank": fields.get("rune_rank") or None,
+                # The stat floor for taking this rune, e.g. Ambidexterity needs Dex 50.
+                "attribute_requirements": attr_map(fields.get("item_attr_req")),
+                # Passive effects the bearer gets, keyed into `effects.json`.
+                "applies_effects": [
+                    {"effect": clean(p.get("power")), "arguments": p.get("arguments") or []}
+                    for p in (fields.get("item_user_power_action") or [])
+                    if isinstance(p, dict) and p.get("power")
+                ],
+                # Powers the rune teaches, keyed into `powers.json`, with the level it
+                # is granted at.
+                "power_grants": [
+                    {"power": clean(p.get("power_type")), "value": p.get("power_value")}
+                    for p in (fields.get("item_power_grant") or [])
+                    if isinstance(p, dict) and p.get("power_type")
+                ],
                 "skill_grants": [
                     {"skill": s.get("skill_type"), "value": signed32(s.get("skill_value", 0))}
                     for s in (fields.get("rune_skill_grant") or []) if isinstance(s, dict)

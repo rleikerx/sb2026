@@ -448,6 +448,14 @@ def main() -> int:
         },
         "count": len(powers),
         "problems": problems,
+        "actionsNote": ("every PowerActions.cfg action, not only those a power lists. A "
+                        "rune's `applies_effects` in content/talents.json names an *action*, "
+                        "and most action ids happen to equal the effect they apply -- which "
+                        "is why 212 of the 231 rune tokens resolve straight against "
+                        "effects.json. The other 19 do not: `TRT-TIRELESS` applies "
+                        "`TIRELESS`. Without this table those are unreachable, so resolve a "
+                        "rune token through here first and fall back to effects.json."),
+        "actions": actions,
         "powers": powers,
     }, indent=1), encoding="utf-8")
 

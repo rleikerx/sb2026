@@ -36,7 +36,8 @@ some numbers you may already have baked are wrong rather than merely stale.
 | `graph/` | re-baked on the fixed pose |
 | `reference/` | **`unitsPerMetre` 2.7411 → 2.5994** — see below |
 | `content/items.json` | `damage` was empty on all 4,021 rows; race/class restrictions were **inverted** on 675 |
-| `content/disciplines.json`, `talents.json` | race/class requirements were **inverted** — see below |
+| `content/disciplines.json`, `talents.json` | race/class requirements were **inverted**; six new columns — see below |
+| `content/powers.json` | gains an `actions` table, without which 19 rune effects are unreachable |
 
 ### Take these — they are new
 
@@ -319,8 +320,8 @@ convenience."* This is that same mechanical data read out of the shipped client.
 |---|---:|---|
 | `races.json` | 33 | base + cap attributes, creation cost, health/mana/stamina, movement speeds, sex variants, eligible classes |
 | `classes.json` | 27 | attribute adjustments, granted skills, skill adjustments, eligible races |
-| `disciplines.json` | 48 | requirements and grants |
-| `talents.json` | 240 | requirements and grants |
+| `disciplines.json` | 48 | requirements, granted powers, rune category |
+| `talents.json` | 240 | requirements and grants, **which are player-selectable**, rune category, attribute floors, applied effects |
 | `items.json` | 4,021 | equip slot, weight, value, **damage**, weapon speed and range, level/rank requirements, race/class restrictions |
 | `structures.json` | 1,062 | **two record types**: 294 buildable templates with a rank ladder, 768 named structures. See below |
 | `powers.json` | 1,465 | cost, target, area, cast time, prerequisites, the ACTION chain, and every message string |
@@ -496,6 +497,56 @@ the fixed one. 26 of the 27 class runes store `restrict: false`, where the naive
 the correct read happen to agree, so **two perfect scores were being reported over a field
 that was backwards on 675 rows**. Passing checks constrain only what they cover.
 
+### talents.json gains six columns, and only 92 of its 240 rows are pickable
+
+**Re-take `talents.json`, `disciplines.json` and `classes.json`.** The wiki documents
+several things about a rune that the export simply did not carry, all of them present in
+the cache the whole time:
+
+| new column | what it is | rows (talents) |
+|---|---|---:|
+| `standard_creation` | **whether a player may pick this at all** | 92 of 240 |
+| `rune_category` | the mutual-exclusion group — only one `Blood Gift` may be taken | 187 |
+| `attribute_requirements` | the stat floor, e.g. Ambidexterity needs Dex 50 | 62 |
+| `applies_effects` | passive effects the bearer gets, keyed into `effects.json` | 46 |
+| `power_grants` | powers the rune teaches, keyed into `powers.json` | 97 |
+| `rank` | `rune_rank` | 47 |
+
+The first is the one to act on. `talents.json` mixes 92 player-selectable traits with
+**148 NPC runes** — `Archer Mob`, `Belgosch Lord`, `Aelfborn Trainer` — in one table, and
+nothing distinguished them. A creation screen built from the old file would have offered
+`Anti-Tank Boss Mob` alongside `Agile`. Filter on `standard_creation`.
+
+15 talents store an unresolved string hash where the category name belongs; those carry
+`rune_category_hash` instead. It resolves against nothing in the client's hash table or in
+this export, so it is preserved rather than dropped.
+
+**Key `talents.json` by `asset_id`, not by name.** Five names carry two rows each with
+different data: `Proficient with Axes`, `Proficient with Daggers`, `Proficient with
+Hammers`, `Witch Sight` and `Wizard's Apprentice`. In every case the wiki matches the lower
+id and the higher is a stripped duplicate — `Proficient with Daggers` 250083 requires
+Healer where 250125 requires nothing.
+
+Two joins are worth knowing about:
+
+`applies_effects` names a **power action**, not an effect. Most action ids happen to equal
+the effect they apply, which is why most tokens resolve straight against `effects.json` —
+but 19 do not (`TRT-TIRELESS` applies `TIRELESS`). `powers.json` now carries the full
+`actions` table for exactly this reason; resolve a rune token through it first and fall
+back to `effects.json`. With it the join is 231/231.
+
+And **194 effects carry a placeholder where their display name should be** — `MOVE-B-5%
+"MOB" 0` and `RES-MAGIC-B-5 "TALENT" 0` are what `Effects.cfg` literally contains. That is
+the client's own data, not a parse error. Read an effect's meaning from its `mods`, not
+its `name`.
+
+`python tools/check_talents_wiki.py` compares against `Starting Traits` (the 85 player
+traits) and `Statistic Rune` (the 35-row stat ladder): **407 of 408 fields agree**, with
+creation cost, rune category, attribute floors, granted attributes, skill grants and
+adjustments, and race and class requirements all exact. The one difference is the wiki
+giving `Blood of the Dragon` a movement bonus the record does not have — checked against
+the raw COBJECT, not just the export.
+
 ### powers.json / effects.json — the part the wiki has least of
 
 The wiki lists about 460 powers. This is **all 1,465**, read out of the decrypted config
@@ -511,6 +562,11 @@ so a power lists the effect ids it ends up applying, and an effect lists the pow
 apply it (`appliedBy`) and the actions that name it (`namedByActions`). The two differ:
 2,908 effects are named by some action but only 1,294 by an action a power lists directly
 — the rest are reached indirectly, mostly as the deferred half of a `DeferredPower`.
+
+`powers.json` also carries the **middle link itself** as a top-level `actions` table, all
+3,046 of them, which it did not before. Resolving it only per-power left every action no
+power lists unreachable — and runes reach effects through exactly those. See the talents
+section above.
 
 **`IsItemEffect` marks 717 of them**, which is most of the answer to why an effect has no
 power: it comes from an item proc. Only **42** effects are reachable from nothing at all.
