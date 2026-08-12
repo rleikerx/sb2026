@@ -76,6 +76,71 @@ only the root translates, every other bone sits at its rest offset and turns.
 Bones absent from a clip should be held at their bind pose. Play at `fps` from the
 file: it is the clip's own stated rate, **not** a constant — do not assume 30.
 
+**They are in the parent's frame, so they apply directly.** The cache does not store
+them that way: it states each bone's rotation in that bone's own *joint frame*, the
+one its `axis` triple defines, and the client conjugates out of it (`C · R · C⁻¹`)
+before composing. The export does that for you, which is what keeps
+`node.rotation = q` correct with no rig lookup. Each clip says so —
+`"rotationFrame": "parent"`.
+
+The exception is the **80 clips no skeleton references**, which carry
+`"rotationFrame": "joint"` because there is no rig to take the `axis` from. If you
+play one, conjugate it yourself against the rig you play it on, using `axis` from
+`rig/skeletons.json` (radians, applied Z then Y then X).
+
+Getting this wrong is not subtle and is what the fix was for: ignoring the joint
+frame leaned every clip about 13 degrees backwards. See
+`docs/CLIENT_BINARY_FINDINGS.md` sections 4 and 6.
+
+## Effect-driven overrides — what a power makes you play instead
+
+Every other lookup here answers *which animation is this action*. `overrides.json`
+answers a different question: **while an effect is active, what plays instead of
+what.** A power that buffs your axe swing does not name a new animation — it applies
+an effect that overrides the swing's ANIMIDs.
+
+```python
+ov = json.loads((root/"animations/overrides.json").read_text())
+
+ov["bySourceAnimId"]["92"]["targets"]      # [79, 321, 322] — what can replace ANIMID 92
+ov["byEffect"]["1AX-001A"]
+#  {"name": "Axe",
+#   "animOverrides": [[64, 326], [66, 326], [67, 326]],
+#   "powers": [{"power": "1AX-001", "name": "Cleave"}]}
+```
+
+**A row is `[source, *targets]`, not a pair.** 156 of the 1,345 lines name two
+replacements for one slot — `AnimOverride 92 321 322` — so read the tail, not `row[1]`.
+
+Resolve the target like any other ANIMID — `resolve[skeleton].animid[326]` — and play
+the clip it names. `targets` is there so you do not have to scan `byEffect`: 61
+separate effects override ANIMID 105 and between them name only 3 replacements.
+
+**This unlocked clips the bundle could not previously reach.** 33 of the 39 target
+ANIMIDs are named by no other source — the whole 400–420 run among them — covering
+**714 (skeleton, ANIMID) pairs**, every one resolving to a track file already on disk.
+
+Two effects carry overrides no power applies: `BRD-030A` and `SHOPKEEPERANIM`. Both
+are listed with an empty `powers` rather than dropped.
+
+## Slot 55 is the death animation
+
+Not named in `actions.json`, because no config names it — it is identified by shape.
+**88 of the 103 rigs fill slot 55 with a clip of their own**, and on skeleton 1 that
+clip takes the spine from 12.9° off upright to **83.9°** over 32 frames: a body
+ending flat on the ground. Rigs 6, 18, 54 and 112 do the same. The 15 rigs without
+one borrow another rig's.
+
+Worth knowing because it is the one whole-body, non-looping, rig-specific animation
+in the set, and a consumer that wants a death has to find it by slot, not by name.
+
+One exception, deliberate rather than broken: `111000055` keeps the spine vertical,
+lets the limbs hang straight down, tips the head back, and translates `ROOT`
+*upward* across its 31 frames — 0.019, 0.110, 0.258, 0.443, 0.659 units,
+accelerating. A limp body rising into the air. Skeletons 111 and 112 are otherwise
+bone-for-bone identical to skeleton 1, so all three of these deaths play on an
+ordinary human model.
+
 ## Item-driven actions
 
 `parry`, `combatIdle` and `weaponSwing` are listed per rig — *can this body plan
@@ -108,6 +173,7 @@ a **weighted choice**, it does not cycle them in order.
 | `actions.json` | the ANIMID vocabulary by source |
 | `models.json` | every model → rig, race, sex |
 | `coverage.json` | per rig, how many ids of each class resolve |
+| `overrides.json` | what an active effect plays instead of what — see above |
 
 `catalog` + `skeleton_actions` + `items` is all most consumers need. `resolve` and
 `actions` are the raw inputs those two are built from.

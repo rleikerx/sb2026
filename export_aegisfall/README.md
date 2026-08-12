@@ -694,11 +694,36 @@ ANIMID slots across idle, emote, parry, combat and weapon-swing at 88 frames:
 Nothing binds it either. The obvious candidates do not fit — every spider in the catalogue
 (and there are dozens) is on skeleton 27.
 
+**Skeletons 111 and 112 are not new rigs at all: they are the male human with a different
+death.** Bone-for-bone identical to skeleton 1 — same names, lengths, directions, axes and
+parents — and identical to each other. 221 of their 231 clips are skeleton 1's own
+(`1000xxx`), nine more are borrowed from 18, and each has exactly **one** clip of its own.
+Their ANIMID tables differ from skeleton 1's in a single slot: **55**.
+
+Slot 55 is the death animation. 88 of the 103 rigs fill it with a clip of their own, and
+the shape is unmistakable — on skeleton 1 the spine goes from 12.9° off upright to **83.9°**
+over 32 frames, which is a body ending flat on the ground. Rigs 6, 18, 54 and 112 all do
+the same thing.
+
+`111000055` does not. Over its 31 frames the spine stays vertical (87.3° → 87.4° above
+horizontal), the arms and legs hang and straighten to point almost straight down (−80.6° →
+−86.5°), the head tips back (neck 86.8° → 60.3°), and `ROOT` translates **upward** — 0.019,
+0.110, 0.258, 0.443, 0.659 units, an accelerating lift rather than a fall.
+
+A limp body rising vertically into the air. Whatever it was for, it is a death that
+ascends instead of collapsing, and it is a distinct animation from both of the others —
+all three differ in their rotation data, not just their frame counts.
+
+So the useful reading is: `1000055` is the ordinary human death, `112000055` is a second
+one that also falls, and `111000055` is the interesting one. All three drive skeleton 1's
+geometry, so any of them can be played on a human model already in `models_rigged/` without
+touching the rig.
+
 The rest of the unbound 18, for anyone shopping:
 
 | skeleton | bones | clips | what it looks like |
 |---|---:|---:|---|
-| 111, 112 | 43 | **231 each** | full humanoid rigs with the complete clip library |
+| 111, 112 | 43 | 231 each | skeleton 1 with **one clip changed** — see below |
 | 122 | 129 | 8 | **eight arms, four legs, mandibles** — see below |
 | 3 | 27 | 7 | quadruped/serpent — `BODY1..3`, `JAW` |
 | 42, 61, 63 | 23–49 | 1–18 | tailed bodies (`TAIL01..04`) |
