@@ -666,12 +666,40 @@ props that exist (`Elven Ballista`, `Wagon`, `Cart`) are static meshes with no s
 all. So this is a rig authored for a siege engine whose model either never shipped or is
 assembled server-side.
 
+**Skeleton 122 is the other one worth a look: an eight-armed, four-legged body.** It reads
+as a face rig from its first few bone names and is nothing of the sort. Each shoulder
+carries one humerus which then branches into **four** forearms — `LRADIUS`, `LRADIUSA`,
+`LRADIUSB`, `LRADIUSC` — and each of those has its own wrist, hand, finger and thumb. Eight
+hands in total. Below, four hip joints carry four single-segment femurs with no tibia or
+foot. It stands 8.55 units, **3.29 m**.
+
+The four `FACE` bones are paired upper and lower appendages either side of the head —
+mandibles rather than expression — and they are animated, in three separate clips.
+
+Only the primary pair of hands carries weapon mounts (`LHELD`, `RHELD`, `LSHIELD`), so it
+wields in two and has six free. It also carries the ordinary humanoid attachments: `HELM`,
+`BEARD`, `HAIR`, and the three sheaths.
+
+Unlike the siege engine, its clip set is rich — 8 clips, and `122000010` alone fills 233
+ANIMID slots across idle, emote, parry, combat and weapon-swing at 88 frames:
+
+| clip | frames | fills |
+|---|---:|---|
+| `122000001` / `122000002` | 14 / 23 | the movement band |
+| `122000010` | 88 | 233 slots: idle, emote, parry, combatIdle, weaponSwing, powerLoop |
+| `122000055` | 31 | one slot; moves the mandibles |
+| `122000075` | 45 | attack, including `powerActionAttack` |
+| `122000200` / `201` / `202` | 30 / 60 / 46 | three specials; `201` is a `powerLoop` channel |
+
+Nothing binds it either. The obvious candidates do not fit — every spider in the catalogue
+(and there are dozens) is on skeleton 27.
+
 The rest of the unbound 18, for anyone shopping:
 
 | skeleton | bones | clips | what it looks like |
 |---|---:|---:|---|
 | 111, 112 | 43 | **231 each** | full humanoid rigs with the complete clip library |
-| 122 | 129 | 8 | a **face rig** — `LFACEUP`, `LFACELOWER`, and their `_END` tips |
+| 122 | 129 | 8 | **eight arms, four legs, mandibles** — see below |
 | 3 | 27 | 7 | quadruped/serpent — `BODY1..3`, `JAW` |
 | 42, 61, 63 | 23–49 | 1–18 | tailed bodies (`TAIL01..04`) |
 | 57 | 4 | 1 | `ROOT`, `LWING`, `RWING`, `LOWERBACK` — a bird reduced to nothing |

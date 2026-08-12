@@ -44,7 +44,8 @@ A professional desktop application for viewing, animating, and exporting game as
 
 ### Skeletal Animation
 - **103 skeletons, 4,228 bones** — 43 is the male-human rig, not the shape of the cache.
-  Body plans range from a 2-bone banner to a 129-bone face rig, and 27-bone quadrupeds.
+  Body plans range from a 2-bone banner to a 129-bone body with eight arms and four
+  legs, and take in 27-bone quadrupeds and a 15-bone wheeled siege engine on the way.
 - **GPU vertex skinning** (up to 128 bones)
 - **Frame interpolation** (lerp for position/scale, slerp for quaternions)
 - **Playback controls**: Play, pause, stop, scrub
