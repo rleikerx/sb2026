@@ -323,7 +323,7 @@ convenience."* This is that same mechanical data read out of the shipped client.
 | `disciplines.json` | 48 | requirements, granted powers, rune category |
 | `talents.json` | 240 | requirements and grants, **which are player-selectable**, rune category, attribute floors, applied effects |
 | `items.json` | 4,021 | equip slot, weight, value, **damage**, weapon speed and range, level/rank requirements, race/class restrictions |
-| `structures.json` | 1,062 | **two record types**: 294 buildable templates with a rank ladder, 768 named structures. See below |
+| `structures.json` | 1,062 | **two record types**: 294 buildable templates with a rank ladder, architecture, city radii and NPC slots; 768 named structures with floors, levels and doors. See below |
 | `powers.json` | 1,465 | cost, target, area, cast time, prerequisites, the ACTION chain, and every message string |
 | `effects.json` | 2,950 | what a power *does*: mods, conditions, animation overrides, and who applies it |
 | `rules.json` | — | movement speeds, recovery rates, the 305 scaling curves, 84 mod types, 94 skills |
@@ -385,7 +385,7 @@ cache had it right throughout.
 `items.json` carries equip slots, which is the field that lines up with the
 `EquipSlot` values `@aegisfall/sim` already stores per character.
 
-### structures.json is two tables, and the templates had no names
+### structures.json is two tables, the templates had no names, and the wiki does check it
 
 **Re-take `structures.json` too.** It holds two disjoint record types and every row was
 missing the other one's columns:
@@ -409,12 +409,56 @@ in a new `building_names`, in rank order.
 all 768 structures that carry it and is absent on the templates. The per-rank `health` is
 the real one and always was.
 
-**The wiki cannot check this.** Of the 250 distinct buildable structure names, **7** exist
-as wiki pages, and most of those are lore or mechanics articles. Exactly one — *Tree of
-Life* — carries a rank table, and its health ladder (80,000 → 500,000) does not match ours
-(3,000 → 25,000 on the template that builds it). With a single comparable page there is no
-way to tell patch drift from a mis-join, so it is recorded as unresolved rather than
-counted either way.
+**The export read 5 of the ~60 fields on these records.** The rest were dropped, and the
+wiki documents several of them. New columns:
+
+| column | on | what it is |
+|---|---|---|
+| `architecture` | 290 templates | Feudal, Elven, Northman, Irekei — how the wiki groups its list |
+| `max_ranks` | 294 | `1` is the wiki's "not rankable": placed at its only rank, never upgrades. 139 templates |
+| `start_rank`, `asset_type` | 294 | where the ladder begins, and what class of asset it is |
+| `zone_influence`, `zone_no_build` | 294 | city projection and exclusion radii, **world units** — divide by `unitsPerMetre` |
+| `valid_npc_categories`, `valid_npc_types` | 152 / 12 | which NPCs may be stationed here |
+| `is_maintenance`, `has_keys`, `embeds_template` | 249 / 237 / 9 | upkeep, locks, and the 9 templates that embed another outright |
+| `floors`, `levels`, `doors`, `has_platform` | 758 / 764 / 131 / 490 structures | geometry |
+
+**Correction — an earlier version of this guide said the wiki could not check this. It
+can.** That claim came from matching structure names against page *titles*: 7 of the 250
+exist as pages, only one carries a rank table, so the file looked unverifiable. The
+buildings are not pages. They are **52 `=== sections ===` of a single `Buildings` page**,
+grouped under five architecture headings, each with Cost, Hirelings, Extras and Size. The
+search found 7; reading the page finds all 52.
+
+That is the same mistake as the two perfect scores described above — a check that does not
+cover the thing cannot clear it — and "the wiki has nothing on this" turned out to be a
+statement about the search rather than about the wiki.
+
+`python tools/check_structures_wiki.py` matches **all 52** and agrees on **102 of 107**
+comparable fields: architecture 43/44, `not rankable` 11/11, hirelings 48/52. The join
+needs three naming rules, all mechanical — the wiki drops the `Feudal ` prefix because
+Feudal is the default style, spells `Invorii` where the cache spells `Invorri`, and writes
+`Cottage [Log, Stone, Wood]` for three separate rows.
+
+**All five disagreements are walls**, and both look like the cache rather than the
+comparison:
+
+- `Irekei Outer Walls` is typed `Feudal` — the three templates building the Irekei wall
+  pieces carry `architecture: ["Feudal"]`, where the Elven and Invorri gate, stair and
+  straight sections are typed correctly.
+- **No wall template allows a hireling at any rank**, though the wiki gives all four wall
+  families `Archer Captain, Wall Archer, Tower Artillery Captain`. Every wall template
+  reads `-1` at every rank; the `Outer Wall with Tower` pieces reach `0` and no higher. If
+  the wiki is right, wall garrisons are assigned server-side.
+
+Two things the wiki documents that the cache genuinely does not have, so they are absences
+rather than gaps in this export: **Cost** (the wiki quotes a builder's price; the client
+ships three generic deed rows, all value 0 or 1 — prices are server-side) and **Size** as a
+grid footprint (`zone_no_build` and `zone_influence` are radii in world units, a different
+quantity, and mapping one to the other would manufacture agreement rather than test for it).
+
+The *Tree of Life* rank table remains the one unresolved item: its wiki health ladder
+(80,000 → 500,000) does not match ours (3,000 → 25,000 on the template that builds it),
+and with one comparable page there is still no way to separate patch drift from a mis-join.
 
 ### items.json shipped an empty damage column, and the wiki is how it was found
 

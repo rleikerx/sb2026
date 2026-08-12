@@ -336,6 +336,33 @@ def main() -> int:
             "template_id": getattr(cobj, "template_id", None),
             "render_ids": list(getattr(cobj, "render_ids", []) or []),
             "ranks": ranks,
+            # Which of the five architecture styles this is built in. The wiki groups its
+            # building list by exactly this, and it is `Invorri` here against the wiki's
+            # `Invorii`. Empty on 4 templates.
+            "architecture": f.get("template_architecture") or [],
+            # `max_ranks` 1 is the wiki's "not rankable": the building is placed at its
+            # only rank and never upgrades. 139 of the 294 templates are like this.
+            "max_ranks": f.get("template_max_ranks"),
+            "start_rank": f.get("template_start_rank"),
+            "asset_type": f.get("template_asset_type"),
+            "is_maintenance": f.get("template_is_maintenance"),
+            "has_keys": f.get("template_has_keys"),
+            # City footprint: how far this projects influence, and how close anything
+            # else may be built. Both in world units -- divide by reference/summary.json's
+            # `unitsPerMetre` for metres.
+            "zone_influence": f.get("template_zone_influence") or [],
+            "zone_no_build": f.get("template_zone_no_build") or [],
+            # Which NPCs may be stationed here, as category and type ids.
+            "valid_npc_categories": f.get("template_valid_npc_cat") or [],
+            "valid_npc_types": f.get("template_valid_npc_type") or [],
+            "terrain": f.get("template_terrain") or [],
+            # 9 templates embed a second template outright rather than referencing one.
+            "embeds_template": bool(f.get("has_embedded_template")),
+            # Geometry, on the structure half of the table rather than the template half.
+            "floors": f.get("structure_floors") or [],
+            "levels": f.get("structure_levels") or [],
+            "doors": f.get("structure_doors") or [],
+            "has_platform": bool(f.get("static_has_platform")),
         })
 
     # A template has no name of its own, which left 294 rows shipping `name: ""` and no way
