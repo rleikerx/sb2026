@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Freeze every playable race's pose as numbers, so a change to the pose math is measured.
+Freeze both poses of every rig that matters, so a change to any of them is measured.
 
 Why this exists
 ---------------
@@ -15,19 +15,41 @@ in this baseline, not a regression against it. The lesson survives the verdict: 
 reports *movement*, and movement is neither good nor bad on its own. `pose_invariants.py`
 is what says whether a move was an improvement.
 
-So: record joint positions, not impressions. Every joint of every playable race at its
-idle clip, normalised by that rig's own stature so the numbers compare across a Centaur
-and a Dwarf. Re-run after a change and the diff is a table, in one command.
+So: record joint positions, not impressions. Normalised by each rig's own stature so the
+numbers compare across a Centaur and a Dwarf. Re-run after a change and the diff is a
+table, in one command.
 
     python tools/pose_baseline.py --write        # freeze the current pose math
     python tools/pose_baseline.py                # compare against the frozen baseline
 
-Exit status is 1 if any rig moved more than --tolerance, so it can gate a commit.
+Two poses per rig, because they answer different questions
+----------------------------------------------------------
+    idle    the rig's own clip frame -- moves when the pose *math* changes
+    stand   what `assemble()` bakes into every exported creature -- moves when the
+            stance ladder or the wing fold changes
 
-Scope is the playable races on purpose: twelve races over eight rigs is small enough to
-run in seconds and covers every body plan a player sees. `--all-creature-rigs` widens it
-to all 85 rigs the creature export uses, which is the right check before shipping a pose
-change but too slow to run constantly.
+**This file used to record only the first, and that was a hole rather than a shortcut.**
+`idle` reads a clip straight, so it never goes near `stand_pose`. Both pose changes of
+11 Aug 2026 -- the ASF joint frame and the switch to the cache's own wings -- were checked
+against a baseline reading 0.00000 across the board while 53 assets changed shape. What
+caught them was a person looking at a render, which is exactly the thing this file exists
+so that nobody has to rely on. With `stand` recorded, reverting the wing change now reads
+0.340 on the Aracoix.
+
+`source` is recorded per row and compared, so a rig that *swaps which pose it takes* is a
+finding on its own: `upright+wingfold` becoming `upright+wingclip` says the pose stopped
+being partly authored by this exporter and became wholly the client's. That fails the run
+even when the joints land in much the same place, because it changes what the export is.
+
+Exit status is 1 if any rig moved more than --tolerance, or if any rig changed source, so
+it can gate a commit.
+
+Scope is the playable races plus every rig in `WING_FOLD_SKELETONS` -- the rigs whose pose
+this exporter chooses or authors rather than reads, which is precisely the set a
+clip-sampling baseline cannot see. Two of those four are not playable races and so were
+covered by nothing at all. `--all-creature-rigs` widens it to all 85 rigs the creature
+export uses, which is the right check before shipping a pose change but too slow to run
+constantly.
 """
 
 from __future__ import annotations
@@ -99,22 +121,49 @@ def measure(am, skeleton_id, pose) -> Dict[str, Any]:
     return {"stature": round(stature, 5), "joints": joints}
 
 
+def stance_pose(am, skeleton_id):
+    """The rig's chosen stance, and the layer that chose it."""
+    am._stand_poses.pop(skeleton_id, None)
+    am._stand_layers.pop(skeleton_id, None)
+    return am.stand_pose(skeleton_id), am.stand_layer(skeleton_id)
+
+
 def collect(export: Path, playable_only: bool) -> Dict[str, Any]:
-    from assets.asset_manager import AssetManager
+    from assets.asset_manager import AssetManager, WING_FOLD_SKELETONS
 
     resolve, races = load_inputs(export)
     am = AssetManager(str(REPO_ROOT / "arcane_dump"))
+
+    wanted = [(label, skeleton_id)
+              for label, _asset_id, skeleton_id in variants(races, playable_only)]
+    # Rigs whose pose this exporter *chooses or authors* rather than reads, which is
+    # exactly the set a clip-sampling baseline cannot see. Two of the four are not
+    # playable races and so were covered by nothing at all.
+    covered = {skeleton_id for _label, skeleton_id in wanted}
+    for skeleton_id in WING_FOLD_SKELETONS:
+        if skeleton_id not in covered:
+            wanted.append((f"winged {skeleton_id}", skeleton_id))
+            covered.add(skeleton_id)
+
     rows: Dict[str, Any] = {}
-    for label, _asset_id, skeleton_id in variants(races, playable_only):
-        try:
-            pose, source = idle_pose(am, resolve, skeleton_id)
-            row = measure(am, skeleton_id, pose)
-        except Exception as error:  # noqa: BLE001 - a rig that will not pose is a finding
-            rows[label] = {"error": f"{type(error).__name__}: {error}"}
-            continue
-        row["skeleton"] = skeleton_id
-        row["source"] = source
-        rows[label] = row
+    for label, skeleton_id in wanted:
+        # Two rows per rig, because they answer different questions and only the first
+        # of them used to be asked. `idle` is the clip's own frame and moves when the
+        # pose *math* changes; `stand` is what `assemble()` bakes into every exported
+        # creature and moves when the stance ladder or the wing fold changes. Both pose
+        # changes of 11 Aug 2026 went in with `idle` reading 0.00000 throughout.
+        for kind, get in (("idle", lambda: idle_pose(am, resolve, skeleton_id)),
+                          ("stand", lambda: stance_pose(am, skeleton_id))):
+            key = f"{label} {kind}"
+            try:
+                pose, source = get()
+                row = measure(am, skeleton_id, pose)
+            except Exception as error:  # noqa: BLE001 - a rig that will not pose is a finding
+                rows[key] = {"error": f"{type(error).__name__}: {error}"}
+                continue
+            row["skeleton"] = skeleton_id
+            row["source"] = source
+            rows[key] = row
     return rows
 
 
@@ -138,8 +187,16 @@ def compare(old: Dict[str, Any], new: Dict[str, Any], tolerance: float):
         for name in shared:
             a, b = before["joints"][name], now["joints"][name]
             deltas.append(sum((a[i] - b[i]) ** 2 for i in range(3)) ** 0.5)
-        note = f"{len(gone)} joints missing" if gone else ""
-        report.append((label, max(deltas), sum(deltas) / len(deltas), note))
+        notes = []
+        if gone:
+            notes.append(f"{len(gone)} joints missing")
+        # A source change is a finding on its own. `upright+wingfold` becoming
+        # `upright+wingclip` says the pose stopped being partly authored by this exporter
+        # and became wholly the client's — which changes what the export *is*, not just
+        # where its joints sit, and is worth saying even when they barely move.
+        if before.get("source") != now.get("source"):
+            notes.append(f"source {before.get('source')} -> {now.get('source')}")
+        report.append((label, max(deltas), sum(deltas) / len(deltas), "; ".join(notes)))
     return report
 
 
@@ -174,16 +231,26 @@ def main() -> int:
     old = json.loads(baseline.read_text())["rigs"]
     report = compare(old, rows, args.tolerance)
     worst = 0.0
-    print(f"{'rig':<16} {'maxMove':>9} {'meanMove':>9}  note")
+    sources_changed = 0
+    print(f"{'rig':<26} {'maxMove':>9} {'meanMove':>9}  note")
     for label, mx, mean, note in report:
         if mx is None:
-            print(f"{label:<16} {'-':>9} {'-':>9}  {note}")
+            print(f"{label:<26} {'-':>9} {'-':>9}  {note}")
             continue
         worst = max(worst, mx)
-        flag = "  <-- REGRESSION" if mx > args.tolerance else ""
-        print(f"{label:<16} {mx:9.5f} {mean:9.5f}  {note}{flag}")
+        # A rig that swapped which pose it takes has changed even if the joints landed in
+        # much the same place, so it fails the run on its own rather than hiding under the
+        # movement tolerance.
+        changed_source = "source " in note
+        sources_changed += 1 if changed_source else 0
+        flag = "  <-- REGRESSION" if mx > args.tolerance else (
+            "  <-- CHANGED" if changed_source else "")
+        print(f"{label:<26} {mx:9.5f} {mean:9.5f}  {note}{flag}")
     print(f"\nworst movement {worst:.5f} stature units (tolerance {args.tolerance})")
-    return 1 if worst > args.tolerance else 0
+    if sources_changed:
+        print(f"{sources_changed} rig(s) changed which pose they take; re-freeze only if "
+              f"that was the intent")
+    return 1 if (worst > args.tolerance or sources_changed) else 0
 
 
 if __name__ == "__main__":
