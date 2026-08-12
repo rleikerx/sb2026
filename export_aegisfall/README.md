@@ -367,14 +367,27 @@ loses it; `SRDX-DB`, whose header repeats its kind/skill/name triple and so has 
 instead of 22; and `PRL-033`, whose cast time reads `2.9.0`. A power with a bad header
 keeps its tokens under `headerUnparsed` rather than getting mislabelled fields.
 
-**Five header fields are `unknown12/13/15/16/17`.** `Powers.cfg` names none of its 22
-positional fields and the client parses them into unnamed struct slots, so the names used
-here are the ones with evidence behind them — `areaRadius` is non-zero on exactly the
-powers whose `areaShape` is not `NONE`, and so on. `animIdA`/`animIdB` are ANIMIDs that
-resolve through `animations/resolve.json`; together with `loopanimid` they are set on 674
-powers, 529 of the 560 that cast for 2 s or more, so they are the phases of a cast. Which
-of the two starts and which finishes is not established, so they are not named as if it
-were.
+**Three of the five unnamed header fields now have names, and two still do not.**
+`Powers.cfg` names none of its 22 positional fields and the client parses them into unnamed
+struct slots (`sb.exe` 0x56e410), so every name here is evidenced from the data —
+`areaRadius` is non-zero on exactly the powers whose `areaShape` is not `NONE`, and so on.
+
+| field | what the evidence says |
+|---|---|
+| `unused12` | 0 on all 1,464 well-formed powers. Parsed, stored, never varied. |
+| `unused13` | 0 on 1,463; one power reads 10.0. Dead in this build either way. |
+| `durationSeconds` | was `unknown16`. Every non-zero value is a canonical second-duration and is uniform within a category: all 425 WEAPON powers read 20.0, all 13 STANCE read 30.0, BUFF runs 120/300/600, and the single 3600 belongs to *Fortress of Faith*. **0 means "not stated here", not "instant"** — 562 powers take their duration from the effect they apply. |
+| `unknown15` | 0.0 (788), 1 (568), 0.1 (68), 0.5 (29), 2.4 (8), 5.0 (3). No correlation found with PULSEINFO, STICKY, cast time or category. |
+| `unknown17` | a flag on 145 powers, **never on a SELF-targeted one**, skewed to DAMAGE and STUN. It is *not* resistability: 110 of the 145 have no resistable action, and 333 powers that do lack the flag. |
+
+The last two keep a number because the evidence does not reach them, and naming them on
+that basis would be a guess wearing a label. `powers.json` carries all of this as
+`headerFieldNotes` so it travels with the data.
+
+`animIdA`/`animIdB` are ANIMIDs that resolve through `animations/resolve.json`; together
+with `loopanimid` they are set on 674 powers, 529 of the 560 that cast for 2 s or more, so
+they are the phases of a cast. Which starts and which finishes is not established, so they
+are not named as if it were.
 
 ### rules.json — the tables powers.json refers to but does not contain
 

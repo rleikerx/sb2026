@@ -39,8 +39,32 @@ which is what pins the count). So the names here are evidenced, not decreed:
                  phases of a cast, then. Which of the two is the start and which the finish
                  is NOT established, so they are handed over as a pair rather than named.
 
-Five fields have no reading worth stating and are passed through as `unknown<n>` with
-their raw value. Naming them on a hunch would be worse than leaving them legible.
+Of the five header slots that had no name, three now have one and two do not. The client
+parses all 22 positionally into unnamed struct slots (`sb.exe` 0x56e410; field 16 lands at
+`power+0x1f4`), and none of them is named anywhere in the binary, so these come from the
+data:
+
+    unused12   0 on all 1,464 well-formed powers. Parsed, stored, never varied.
+    unused13   0 on 1,463; one power reads 10.0. Dead in this build either way.
+
+    durationSeconds   was `unknown16`. Every non-zero value is a canonical duration in
+                      seconds and is uniform within a category: all 425 WEAPON powers read
+                      20.0 (5 read 30.0), all 13 STANCE powers read 30.0, and BUFF runs
+                      120/300/600 with a single 3600 -- which belongs to `Fortress of
+                      Faith`. 562 powers read 0, which is "not stated here" rather than
+                      "instant": those take their duration from the effect they apply.
+
+The two that keep a number are the two the evidence does not reach, and they are left that
+way on purpose:
+
+    unknown15   6 values -- 0.0 (788), 1 (568), 0.1 (68), 0.5 (29), 2.4 (8), 5.0 (3). No
+                correlation found with PULSEINFO, STICKY, cast time or category.
+    unknown17   a flag, set on 145 powers. Never on a SELF-targeted one: every power that
+                carries it targets PCMOBILE, PC, MOBILE or BUILDING, and it skews to DAMAGE
+                and STUN. It is *not* resistability -- 110 of the 145 have no resistable
+                action, and 333 powers with one do not carry the flag.
+
+Naming those two on the strength of that would be a guess wearing a label.
 
 Damaged records are reported, not repaired
 ------------------------------------------
@@ -77,12 +101,12 @@ from export_animation_table import block_head, cfg_blocks
 
 HEADER_FIELDS = [
     "code", "name", "kind", "skillId", "skillName", "target", "range", "areaShape",
-    "areaRadius", "areaAffects", "costType", "costAmount", "unknown12", "unknown13",
-    "castSeconds", "unknown15", "unknown16", "unknown17", "usableIn",
+    "areaRadius", "areaAffects", "costType", "costAmount", "unused12", "unused13",
+    "castSeconds", "unknown15", "durationSeconds", "unknown17", "usableIn",
     "animIdA", "animIdB", "targeting",
 ]
 NUMERIC = {"skillId", "range", "areaRadius", "costAmount", "castSeconds",
-           "unknown12", "unknown13", "unknown15", "unknown16", "unknown17",
+           "unused12", "unused13", "unknown15", "durationSeconds", "unknown17",
            "animIdA", "animIdB"}
 # Keys whose value is a single quoted sentence shown to the player.
 MESSAGE_KEYS = {
@@ -385,9 +409,26 @@ def main() -> int:
         "note": ("Powers.cfg, all 1,465. `actions` are resolved to the effects they apply "
                  "and `effects` is that list flattened. `animIdA`/`animIdB` and "
                  "`loopanimid` are ANIMIDs -- resolve them through animations/resolve.json "
-                 "per skeleton. `unknown12/13/15/16/17` are unnamed header slots, passed "
-                 "through rather than guessed at. Keys other than the header keep the "
-                 "source's own spelling, lowercased."),
+                 "per skeleton. `unused12`/`unused13` are parsed and never vary. "
+                 "`durationSeconds` is 0 on 562 powers, meaning not stated here rather "
+                 "than instant. `unknown15` and `unknown17` are the two header slots the "
+                 "evidence does not name; see headerFieldNotes. Keys other than the header "
+                 "keep the source's own spelling, lowercased."),
+        "headerFieldNotes": {
+            "unused12": "0 on all 1,464 well-formed powers.",
+            "unused13": "0 on 1,463; one power reads 10.0.",
+            "durationSeconds": ("seconds. Uniform within a category: WEAPON 20.0, STANCE "
+                                "30.0, BUFF 120/300/600 and one 3600. 0 means the duration "
+                                "is not stated here, not that the power is instant."),
+            "unknown15": ("0.0/1/0.1/0.5/2.4/5.0. No correlation found with PULSEINFO, "
+                          "STICKY, cast time or category."),
+            "unknown17": ("flag on 145 powers, never on a SELF-targeted one, skewed to "
+                          "DAMAGE and STUN. Not resistability: 110 of the 145 have no "
+                          "resistable action and 333 powers with one lack the flag."),
+            "animIdA/animIdB": ("both resolve as ANIMIDs and are set with loopanimid on "
+                                "674 powers, 529 of the 560 casting 2s or longer. Which "
+                                "starts the cast and which finishes it is not established."),
+        },
         "count": len(powers),
         "problems": problems,
         "powers": powers,
