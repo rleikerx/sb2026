@@ -248,6 +248,20 @@ class AssetExporter:
         path = folder / f"{asset_id}_{slugify(asset.name)}.{fmt}"
         scene.export(str(path))
 
+        # How this model is posed, per model, in the bundle rather than only in
+        # the guide. A consumer opening a creature GLB could not previously tell
+        # whether it was standing on a frame out of the cache, wearing wing
+        # rotations this exporter authored, or sitting at its bind pose -- and
+        # those three want different handling. `pose_layer` names the rung that
+        # answered and carries `+wingfold` on the only rigs whose pose is not
+        # wholly the client's; `pose_clip` names the frame, so any claim here can
+        # be gone and looked at. Both are null for anything not posed: props,
+        # items, structures, and the rigs no clip stands.
+        pose_layer = pose_clip = None
+        if asset.skeleton_id is not None and self.pose is None:
+            pose_layer = self.am.stand_layer(asset.skeleton_id)
+            pose_clip = self.am.stand_source(asset.skeleton_id)
+
         return {
             "asset_id": asset_id,
             "name": asset.name,
@@ -256,6 +270,8 @@ class AssetExporter:
             "skipped_parts": len(asset.parts) - added,
             "textures": len(textures),
             "skeleton_id": asset.skeleton_id,
+            "pose_layer": pose_layer,
+            "pose_clip": pose_clip,
             "file": str(path.relative_to(out_dir)).replace("\\", "/"),
             "bytes": path.stat().st_size,
         }

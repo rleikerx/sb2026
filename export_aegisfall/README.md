@@ -1086,7 +1086,7 @@ corrections, and the third is the largest:
    it is how one body mesh serves a goblin and a giant — so every creature figure written before
    now was the unscaled base mesh, and they were all effectively the same height.
 2. **The yardstick is a person, not the bestiary.** With scaling applied, the median of all
-   creatures reads 5.577 units, which would put the world at 3.10 units/m — but that median spans
+   creatures reads 5.593 units, which would put the world at 3.10 units/m — but that median spans
    dragons. Measured against the twelve playable races instead:
 
 | | units | |---| | units |
@@ -1109,7 +1109,7 @@ its stature, and 5.486 once the wings were posed from its own idle clip. That re
 under `models/`, *The Nephilim wings, fixed*.
 
 Human is the one 1.8 m actually describes, so it leads. The playable-race median is 5.105
-and the all-creature median 5.577, reported alongside for context rather than used.
+and the all-creature median 5.593, reported alongside for context rather than used.
 
 3. **The pose it was measured from was wrong, and the feet are why.** Every one dropped 4–5% when the
    ASF joint frame landed, because the figures had been measured off a body leaning ~13°
@@ -1201,8 +1201,39 @@ which matters if you are matching density rather than size.
 
 ```
 models/Structure/124100_Ardani_Library.glb
-models/assets.json      # asset_id, name, kind, parts, textures, skeleton_id, file, bytes
+models/assets.json      # asset_id, name, kind, parts, textures, skeleton_id,
+                        # pose_layer, pose_clip, file, bytes
 ```
+
+**`pose_layer` and `pose_clip` say how each creature is posed, per model.** They were
+added on 13 Aug 2026 and the absence was a real gap: a consumer opening a creature GLB
+could not tell whether it was standing on a frame out of the cache, wearing wing rotations
+this exporter authored, or sitting at its bind pose — and those want different handling.
+All 2,380 creatures carry both; everything unposed carries null.
+
+    "skeleton_id": 12, "pose_layer": "grounded+limbs", "pose_clip": "12000130:22"
+
+`pose_layer` names the rung that answered — `upright`, `hunched`, `grounded+limbs`,
+`grounded`, `rest`, with the suffixes below. `pose_clip` is `MOTION:FRAME`, so any pose in
+this bundle can be gone and looked at rather than taken on trust. What ships today:
+
+| pose_layer | creatures | |
+|---|---:|---|
+| `upright` | 1,024 | biped, legs straight |
+| `grounded+limbs` | 774 | four legs under the body |
+| `rest` | 164 | no clip stands this rig; the cache's bind pose |
+| `hunched` | 143 | biped that never straightens its legs |
+| `grounded+limbs+wideleg` | 111 | arthropods — see below, not a defect |
+| `upright+torso` | 74 | stance settled by the spine rung |
+| `upright+wingclip` | 68 | wings read from a clip |
+| `grounded+limbs+wingfold` | 18 | **wings authored here, not read from the cache** |
+| `upright+torso+wingfold` | 2 | likewise |
+| `grounded` | 2 | grounded, forelimbs not settled |
+
+**The 20 `+wingfold` rows are the only assets in this export whose pose is not wholly the
+client's** — the Griffon and Nelchael families, whose wings no frame in this cache folds.
+`+wingclip` is the opposite and the good case: considered for a fold, and the cache turned
+out to hold better wings than this exporter would have written.
 
 | Category | Files | Size |
 |---|---:|---:|
@@ -1325,7 +1356,7 @@ only a step that runs after the body is chosen can. Two rigs' worth of collatera
 that the baseline caught in one run, on a change whose whole claim was that it touched one
 race.
 
-#### Still wrong: skeleton 12, the big-cat rig, ships the one frame that does not stand
+#### Fixed the same day, and it was never only the cats: 12 rigs were lying down
 
 The posed frame leaves the body prone and stretched, legs splayed rather than under it,
 and the head out in front of the neck with a visible gap. It is the rig and not one bad
@@ -1363,11 +1394,42 @@ about a quarter to it rather than all of it.
 in the same order, plus `TAIL5` and `TAIL6`. Any stance test that works on one is
 evaluating the same joints on the other.
 
-Not repaired here, because the fix is a change to how the stance is chosen rather than a
-new source of data, and that decides the pose of every rig this export ships — the same
-reason `_wings_from_clip` was kept to a step that runs after the body frame is chosen.
-What it is *not* is short of evidence: the frames are listed above and the sheet draws
-them. See `dev_log/081326.md` for the review that corrected this section.
+**Asking the same question of every rig found eleven more.** The grounded path had no test
+for legs at all, so `AssetManager._stands_on_its_legs` is now its top rung: grounded,
+forelimbs down, *and* the worst leg no more than `STAND_MAX_GROUNDED_TILT` off vertical.
+A rig with no such frame falls through to exactly the pose it had.
+
+| rig | was | now |
+|---|---|---|
+| 14 Ancient Treant | on its side, legs 90° | standing, 10° |
+| 69 Forest Ape | face down, 111° | on legs and knuckles, 67° |
+| 70 Hunting Griffon | sprawled, 87° | standing, 49° |
+| 12 the big cats | sprawled, 87° | standing, 58° |
+| 88 Lesser Wyvern | 78° | standing, 43° |
+| 35 Ancient Blue Drake | 87° | standing, 68° |
+| 108 Greater Werewolf | 83° | standing, 65° |
+| 38 Basilisk, 25 Alligator, 22 Summoned Rat, 45 Manticore, 81 Young Boar | 73–99° | 42–67° |
+
+**70° was chosen by rendering both sides of it.** A quadruped's femur is angled, so the
+biped threshold of 30 is far too tight; measured across this cache a correct four-legged
+stand sits at 35–60 and a sprawl at 73–161. At 45, five of twelve rigs sampled have no
+frame at all and the Hunting Hound — which stands correctly today, and is the control —
+is moved off the pose it already had. At 70 the hound does not move.
+
+**Eight rigs reach the fallback and are labelled `+wideleg`. They are not broken.** Black
+Spiderling, Dire Sting Tail, Death Beetle, Giant Crab, Ant Worker, Doomcrawler and the
+Harpy: arthropod legs come off the body sideways and measure 94–162° while the creature
+stands perfectly correctly. The tag says which rung answered, not that anything is wrong —
+drawn, they are the rigs this test has nothing useful to say about.
+
+`images/pose_review/stance-fixed.png` draws the twelve; `catrig_frames.png` is the cat
+rig's own clips that started it. See `dev_log/081326.md` for the review that corrected
+this section, which had said the cache held no standing frame.
+
+**And the baseline now covers the bestiary.** `docs/pose_baseline.json` went from 48 rows
+to 192 — the playable races and two winged rigs, to one representative asset per bound
+rig. Twelve rigs shipped face-down through every check this repo had, because the check
+covered the twelve races and the bestiary was 85 rigs nothing measured.
 
 **The count that found the first one, and would find the next.** Bones in the rig against
 bones the stand pose covers: 15 unposed is the normal figure on a 43-bone humanoid —

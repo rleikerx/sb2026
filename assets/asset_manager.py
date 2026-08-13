@@ -57,6 +57,33 @@ STAND_WING_BONES = ('WING',)
 # on a cliff edge.
 STAND_MAX_HUNCH_TILT = 55.0
 
+# The same question asked of a hound, a drake or a boar: are its legs under it?
+#
+# The grounded path had no answer, and the cost was rigs shipping face-down. A
+# body lying on its side is no taller than it is wide and has its feet at the
+# bottom of it, so it passes `_rests_on_ground` exactly as a standing animal
+# does, and the calmest of those wins — which on a rig whose bind pose runs every
+# bone down one axis is very often the one lying flat. 14 (Treant), 69 (Forest
+# Ape), 70 (Griffon), 12 (the big cats), 88 (Wyvern) and 35 (Drake) all shipped
+# that way; the Treant lay on its side at 90 degrees while a frame at 10 sat
+# unused in its own clips.
+#
+# 30 degrees is the standing threshold for a biped and it is far too tight here:
+# a quadruped's femur is angled, and measured across this cache a correct
+# four-legged stand sits at 35-60 while a sprawl sits at 73-161. 70 is inside
+# that gap and was picked by rendering both sides of it -- at 45, five of twelve
+# rigs sampled have no frame at all and the Hunting Hound, which stands correctly
+# today, is moved off the pose it already had. At 70 the hound does not move.
+#
+# Rigs with no frame under it keep exactly the pose they had and are labelled
+# `+wideleg`. On this cache that is eight rigs and every one of them is an
+# arthropod or the Harpy -- Black Spiderling, Dire Sting Tail, Death Beetle,
+# Giant Crab, Ant Worker, Doomcrawler -- whose legs come off the body sideways
+# and read as 94 to 162 degrees while the creature is standing perfectly
+# correctly. The tag describes which rung answered, not a defect: rendered, they
+# are the rigs this rung has nothing useful to say about.
+STAND_MAX_GROUNDED_TILT = 70.0
+
 # Rigs the upright test cannot describe — snakes, drakes, quadrupeds — are judged
 # on the shape the whole skeleton makes instead. Their rest pose stacks every
 # bone up one axis, so a viper 22 units long reads as a 33-unit pole; what marks
@@ -364,6 +391,9 @@ class AssetManager:
         self._stand_poses: Dict[int, Dict[str, tuple]] = {}
         # skeleton_id -> which rung of stand_pose answered, for reporting
         self._stand_layers: Dict[int, str] = {}
+        self._stand_sources: Dict[int, Optional[str]] = {}
+        self._last_frame_source: Optional[str] = None
+        self._last_wing_source: Optional[str] = None
 
     # ------------------------------------------------------------------
     # Archive discovery
@@ -677,13 +707,21 @@ class AssetManager:
                 # Ask for settled forelimbs first and drop the requirement only
                 # if the rig has no such frame, so wanting better arms can never
                 # cost a rig the pose it already had.
-                # Not a ladder, so it has no rung tag of its own; stated rather
-                # than inherited from the upright attempt above.
+                #
+                # A ladder like the upright one, and for the same reason: the top
+                # rung is what a standing animal looks like, and each rung below
+                # it is reached only by what the one above rejected. See
+                # `STAND_MAX_GROUNDED_TILT` for what the first rung is worth.
                 rung = ''
                 layer = 'grounded+limbs'
-                best = self._calmest_frame(skeleton, self._rests_with_limbs_down,
+                best = self._calmest_frame(skeleton, self._stands_on_its_legs,
                                            samples=STAND_FRAME_SAMPLES)
                 if not best:
+                    rung = '+wideleg'
+                    best = self._calmest_frame(skeleton, self._rests_with_limbs_down,
+                                               samples=STAND_FRAME_SAMPLES)
+                if not best:
+                    rung = ''
                     layer = 'grounded'
                     best = self._calmest_frame(skeleton, self._rests_on_ground,
                                                samples=STAND_FRAME_SAMPLES)
@@ -706,7 +744,26 @@ class AssetManager:
         # pose is the cache's and nothing here was invented.
         self._stand_poses[skeleton_id] = best
         self._stand_layers[skeleton_id] = layer + (('+' + wing_source) if wing_source else '')
+        # Which clip and frame this pose is, so the manifest can name it. A layer
+        # says which rung answered; this says what it answered with, and it is the
+        # difference between "the exporter posed this" and a reader being able to
+        # go and look at the same frame.
+        source = self._last_frame_source if best else None
+        if source and self._last_wing_source:
+            source = f"{source}+wings {self._last_wing_source}"
+        self._stand_sources[skeleton_id] = source
         return best
+
+    def stand_source(self, skeleton_id: int) -> Optional[str]:
+        """
+        The clip and frame `stand_pose` chose, as `MOTION:FRAME`, or None at rest.
+
+        Reported by the code that chose, for `stand_layer`'s stated reason. A rig
+        whose wings came from a second clip carries both.
+        """
+        if skeleton_id not in self._stand_sources:
+            self.stand_pose(skeleton_id)
+        return self._stand_sources.get(skeleton_id)
 
     def wing_fold_pose(self, skeleton_id: int) -> Dict[str, tuple]:
         """
@@ -919,10 +976,11 @@ class AssetManager:
         bones = getattr(skeleton, 'bones', None) or []
         wing_names = {(b.name or '').upper() for b in bones
                       if any(k in (b.name or '').upper() for k in STAND_WING_BONES)}
+        self._last_wing_source = None
         if not wing_names or any(name.upper() in wing_names for name in rotations):
             return rotations, None
 
-        best, calmest = None, None
+        best, calmest, source = None, None, None
         for token in sorted(set(getattr(skeleton, 'motion_tokens', None) or [])):
             motion = self.load_motion(token)
             data = getattr(motion, 'frames', None) if motion else None
@@ -943,10 +1001,11 @@ class AssetManager:
                 ]
                 calm = sum(turns) / len(turns) if turns else 0.0
                 if calmest is None or calm < calmest:
-                    calmest, best = calm, candidate
+                    calmest, best, source = calm, candidate, f"{token}:{frame}"
 
         if not best:
             return rotations, None
+        self._last_wing_source = source
         merged = dict(rotations)
         for name in wing_names:
             if name in best:
@@ -1004,6 +1063,11 @@ class AssetManager:
         """The accepted frame that disturbs the rest pose least, or {} if none is."""
         best: Dict[str, tuple] = {}
         calmest = None
+        # Which clip and frame won, for the manifest to carry. Cleared here so a
+        # rung that rejects everything cannot leave the rung above it's answer
+        # standing: `_best_frame` walks down until one rung yields, and the
+        # source has to belong to the rung that did.
+        self._last_frame_source = None
 
         for token in sorted(set(getattr(skeleton, 'motion_tokens', None) or [])):
             motion = self.load_motion(token)
@@ -1029,6 +1093,7 @@ class AssetManager:
                 calm = sum(turns) / len(turns) if turns else 0.0
                 if calmest is None or calm < calmest:
                     calmest, best = calm, rotations
+                    self._last_frame_source = f"{token}:{frame}"
 
         return best
 
@@ -1243,6 +1308,40 @@ class AssetManager:
                     and cls._torso_upright(skeleton.posed_segments(rotations)))
 
         return (('', still), ('', arms_down), ('+torso', torso_up), ('', gate))
+
+    @classmethod
+    def _stands_on_its_legs(cls, skeleton, rotations: Dict[str, tuple]) -> bool:
+        """
+        Grounded, forelimbs down, and standing on its legs rather than lying.
+
+        The rung the grounded path had been missing. `_rests_on_ground` asks the
+        body to be no taller than it is wide and its feet to be at the bottom of
+        it — both of which a creature lying flat on its side satisfies perfectly.
+        Legs are what separate the two, and until this rung existed nothing on
+        the grounded path looked at them.
+        """
+        if not cls._rests_with_limbs_down(skeleton, rotations):
+            return False
+        tilt = cls._leg_tilt(skeleton.posed_segments(rotations))
+        # A snake has no legs to stand on; it is judged by shape alone, as before.
+        return tilt is None or tilt <= STAND_MAX_GROUNDED_TILT
+
+    @staticmethod
+    def _leg_tilt(segments: Dict[str, tuple]) -> Optional[float]:
+        """
+        Worst leg tilt off vertical, in degrees, or None if the rig has no legs.
+
+        `_stance_angles` answers this too and cannot be used here: it reports the
+        foot roll alongside and returns None when either group is missing, so a
+        rig with legs and no feet reads as "nothing to judge". The Treant is that
+        rig, and it was the loudest thing this rung was written to catch — it lay
+        on its side at 90 degrees with a 10-degree frame unused in its own clips.
+        """
+        legs = [direction for name, (direction, _tip) in segments.items()
+                if any(k in name for k in STAND_LEG_BONES)]
+        if not legs:
+            return None
+        return max(math.degrees(math.acos(max(-1.0, min(1.0, -d[1])))) for d in legs)
 
     @classmethod
     def _rests_with_limbs_down(cls, skeleton, rotations: Dict[str, tuple]) -> bool:

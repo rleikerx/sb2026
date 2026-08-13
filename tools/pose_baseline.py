@@ -145,6 +145,29 @@ def collect(export: Path, playable_only: bool) -> Dict[str, Any]:
             wanted.append((f"winged {skeleton_id}", skeleton_id))
             covered.add(skeleton_id)
 
+    # And every other rig a creature model binds to.
+    #
+    # The stance ladder decides those too, and nothing measured them. On 13 Aug a
+    # new rung moved the stance of twelve rigs -- Treant, Forest Ape, Griffon, the
+    # big cats, Wyvern, Drake, Werewolf and more, all of which had been shipping
+    # face-down -- and this file reported 0.00000 on every row it had, because the
+    # rows it had were the playable races and two winged rigs. The bestiary is 85
+    # bound rigs and it was covered by nothing.
+    #
+    # Cheap: one representative asset per skeleton, lowest id, the same rule the
+    # scale reference uses to pick between a race's two bodies.
+    manifest = export / "models" / "assets.json"
+    if manifest.exists():
+        for record in sorted(json.loads(manifest.read_text(encoding="utf8")),
+                             key=lambda r: r.get("asset_id") or 0):
+            skeleton_id = record.get("skeleton_id")
+            if record.get("kind") != "Creature" or skeleton_id is None:
+                continue
+            if skeleton_id in covered:
+                continue
+            wanted.append((f"rig {skeleton_id} {record.get('name')}", skeleton_id))
+            covered.add(skeleton_id)
+
     rows: Dict[str, Any] = {}
     for label, skeleton_id in wanted:
         # Two rows per rig, because they answer different questions and only the first
