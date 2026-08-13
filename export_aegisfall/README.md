@@ -1086,25 +1086,40 @@ corrections, and the third is the largest:
    it is how one body mesh serves a goblin and a giant — so every creature figure written before
    now was the unscaled base mesh, and they were all effectively the same height.
 2. **The yardstick is a person, not the bestiary.** With scaling applied, the median of all
-   creatures reads 5.579 units, which would put the world at 3.10 units/m — but that median spans
+   creatures reads 5.577 units, which would put the world at 3.10 units/m — but that median spans
    dragons. Measured against the twelve playable races instead:
 
 | | units | |---| | units |
 |---|---:|---|---|---:|
 | Dwarf | 3.880 | | Centaur | 5.701 |
 | **Human** | **4.679** | | Minotaur | 6.521 |
-| Shade | 4.006 | | Nephilim | 4.430 |
-| Aelfborn | 4.932 | | Aracoix | 4.649 |
+| Shade | 4.653 | | Nephilim | 5.486 |
+| Aelfborn | 4.932 | | Aracoix | 5.044 |
+| Elf | 5.168 | | Irekei | 5.166 |
+| Vampire | 4.691 | | Half-Giant | 5.351 |
 
-Human is the one 1.8 m actually describes, so it leads. The playable-race median is 5.049
-and the all-creature median 5.579, reported alongside for context rather than used.
+These are the twelve figures `reference/summary.json` carries under
+`_scale_reference.per_race_units`, re-checked against the shipped meshes on 13 Aug 2026.
+Three had drifted from what this page said: the Aracoix (4.649), the Nephilim (4.430) and
+the Shade (4.006). The Shade entry was a different body — asset 2016 rather than 2015 —
+which is the `2011_Human` / `2012_Human` trap described below, caught in this page's own
+table. The other two moved when their wings did, and the Nephilim's is the newest figure
+here: it read 8.260 that morning, which was its wings standing above its head rather than
+its stature, and 5.486 once the wings were posed from its own idle clip. That repair is
+under `models/`, *The Nephilim wings, fixed*.
+
+Human is the one 1.8 m actually describes, so it leads. The playable-race median is 5.105
+and the all-creature median 5.577, reported alongside for context rather than used.
 
 3. **The pose it was measured from was wrong, and the feet are why.** Every one dropped 4–5% when the
    ASF joint frame landed, because the figures had been measured off a body leaning ~13°
-   backwards. The Aracoix dropped 8.685 → 4.649 — its wings had been standing above its
-   head, and folded down its back it measures what a Human measures, which is what a
-   humanoid body should. Widths rose 40–50% for the same reason: limbs are where they
-   belong instead of collapsed against the torso.
+   backwards. The Aracoix dropped 8.685 → 5.044 — its wings had been standing above its
+   head, and folded down its back it lands within 8% of a Human, which is what a humanoid
+   body should. This page said 4.649 until 13 Aug 2026; that figure was taken between the
+   joint-frame fix and the switch to the cache's own wing clip, and never re-taken. 5.044
+   is the shipped mesh's own bounding box, read out of `2002_Aracoix.glb` rather than off
+   a tool that could have drifted with it. Widths rose 40–50% for the same reason: limbs
+   are where they belong instead of collapsed against the torso.
 
    **The mechanism is the toes.** The cache's rest pose runs every limb straight down its
    axis, so the foot points at the floor like a ballet en pointe — `LFOOT` reads
@@ -1250,7 +1265,104 @@ Shadowbane movement rather than reuse of the Quaternius library. **They are now
 exported**, in full, as `motions/tracks/` — see the next section.
 
 For reference use — proportion, silhouette, how a body was cut into parts — the
-creature GLBs are fine as they are.
+creature GLBs are fine as they are, with the exception in the next section.
+
+### The Nephilim wings, fixed — and a big-cat rig that is not
+
+Both found by eye on 13 Aug 2026, off the sheet `tools/pose_sheet.py` writes, which takes
+two seconds to regenerate:
+
+    python tools/pose_sheet.py --ids 2025,14173,12198,12009 --tag rigcheck
+
+#### Fixed: skeletons 115 and 116 shipped their wings at bind
+
+The Nephilim's wings were a vertical pinwheel of spars standing over its head — the cache's
+bind pose, carried into the mesh untouched. That was what the old **8.260** in the scale
+table measured: the box ran y −2.891 to +5.369 and the top of it was wing, not head, 1.77×
+a Human where the Aracoix on the same body plan is 1.08×.
+
+**Nothing had to be authored; the cache already held the answer.** The rig's own idle clip,
+`115000010`, drives 40 bones including all twelve wing channels — `LWING01`–`05`,
+`RWING01`–`05` and both `WINGJOINT`s. The stand pose being shipped covered 28 of the rig's
+55 bones and none of them.
+
+What selected that frame is `_calmest_frame`, which takes the standing frame that *disturbs
+the rest pose least*. A clip that never mentions the wings disturbs the rest pose less than
+one that sweeps them out to where a wing belongs, so the rule preferred, exactly, the clip
+that left them at bind. It was written to reject frames standing with their arms in the
+air; it also selects against wings.
+
+The repair is `AssetManager._wings_from_clip`: choose the body frame exactly as before,
+then fill an untouched wing subtree from the calmest standing frame that does drive it.
+Same gate, same score, wing bones only. It is the mirror of `_fold_wings` — that one
+*authors* rotations because no frame in this cache folds a Griffon's wings; this one reads
+a frame because for these rigs one exists. So the layer is `upright+wingclip` and nothing
+on a Nephilim is invented.
+
+| | before | after |
+|---|---:|---:|
+| Nephilim (2025) height | 8.260 | **5.486** |
+| across | 1.712 | **6.066** |
+| depth | 4.376 | **2.727** |
+| against a Human | 1.77× | **1.17×** |
+
+which is the silhouette in the client capture: wings out to both sides, membrane hanging,
+tops barely above the head. `images/pose_review/nephilim-fixed.png` is the current pose
+and `nephilim_wingclip.png` the three-way that established it.
+
+**What moved, and nothing else did.** `pose_baseline.py` reports the two Nephilim rigs at
+0.495 and every other rig at 0.00000, with `source upright -> upright+wingclip` on exactly
+those two; `pose_invariants.py` is unchanged to the decimal, rig 18 still −3.6°. The 15
+assets on these two skeletons were re-baked and `reference/` re-measured, so the bundle and
+its numbers agree. `units_per_metre` is untouched at 2.5994 — it is derived from the Human,
+which never moved.
+
+**The wrong fix, recorded because it looked right.** The first attempt ranked frames on
+wing coverage inside `_calmest_frame`. It fixed the Nephilim and moved the Aracoix as well
+— because the Aracoix's calmest frame carries no wing channels *either*, and `_fold_wings`
+had been supplying them afterwards. A scoring change could not tell those two cases apart;
+only a step that runs after the body is chosen can. Two rigs' worth of collateral movement
+that the baseline caught in one run, on a change whose whole claim was that it touched one
+race.
+
+#### Still wrong: skeleton 12 — the big-cat rig — stands nothing up. The posed frame leaves the body
+prone and stretched, legs splayed rather than under it, and the head floating clear of
+the neck with a visible gap. It is the rig and not one bad asset: a plain `Cheetah`
+(12198) does it exactly as the `Chimera` (14173) does. The control is `Hunting Hound`
+(12009) on skeleton 10, which stands correctly on four legs from the same code.
+
+It shows up in the numbers as length. Depth over height runs **3.5** across the rig —
+Chimera 27.148 / 7.584, Cheetah 11.498 / 3.271 — against 2.05 for the hound. A cheetah
+4.4 m long is the detached head and the sprawl, not the animal.
+
+Carries it: 80 assets — every cat in the bestiary (Battle, Blizzard, Desert, Dire, Dune,
+Frost Tiger, Leopard, Cougar, Jaguar, Panther and their Giant/Great variants), the three
+Chimeras, and the summoned familiars.
+
+This one is not repaired, and the reason is not effort: there is no frame in skeleton 12's
+clips that anyone here has established as a stand. `_wings_from_clip` worked because the
+Nephilim's own idle demonstrably holds the shape the client draws — the cat rig needs that
+question answered first, and answering it wrongly would bake a sprawl into 80 assets and
+call it a pose. Recorded, with the picture, rather than guessed at.
+
+**The count that found the first one, and would find the next.** Bones in the rig against
+bones the stand pose covers: 15 unposed is the normal figure on a 43-bone humanoid —
+fingers, sheaths, helm and beard, which no clip drives — and the Aracoix carried the same
+15 on its 55-bone rig. The Nephilim carried **27**, which was those 15 plus its twelve wing
+bones exactly. It reads 15 now. One number, computed from the cache, saying which rigs are
+wearing their bind pose in public:
+
+| race | rig bones | posed | unposed | layer |
+|---|---:|---:|---:|---|
+| Human, Elf, Dwarf, Shade, Irekei, Aelfborn, Half-Giant, Vampire | 43 | 28 | 15 | `upright` |
+| Aracoix | 55 | 40 | 15 | `upright+wingclip` |
+| Nephilim | 55 | 40 | 15 | `upright+wingclip` |
+| Centaur | 56 | 45 | 11 | `grounded+limbs` |
+| Minotaur | 47 | 0 | 47 | `rest` — no clip stands it; documented above |
+
+Two rigs still hold wings at bind, 15 and 91, and they are the `rest` case rather than this
+one: no clip stands either body at all, so filling the wings alone would join a posed wing
+to an unposed body. Nothing binds them to a creature in this build.
 
 ### 18 rigs are bound to no model, and one of them is a siege engine
 

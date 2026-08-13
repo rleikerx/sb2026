@@ -22,6 +22,27 @@ STAND_FOOT_BONES = ('FOOT',)
 STAND_MAX_LEG_TILT = 30.0    # degrees off vertical
 STAND_MAX_FOOT_TILT = 10.0   # degrees off horizontal
 
+# A wing's bind pose is not a resting shape. Every wing bone in this cache runs
+# straight down its own axis at bind, which draws a vertical fan of spars standing
+# over the creature's head — and `_calmest_frame` picks the frame that disturbs the
+# rest pose least, so a clip that never mentions the wings beats one that sweeps
+# them out to where a wing belongs.
+#
+# That is how the Nephilim came to ship its bind pose for a day and a half. Its own
+# idle clip, 115000010, drives 40 bones including all twelve wing channels; the
+# frame that won drives 28 and none of them. Client capture settles the shape —
+# wings out to both sides, membrane hanging, tops barely above the head — and that
+# is what the idle clip draws.
+#
+# The repair is `_wings_from_clip`, and it is deliberately not a change to the
+# scoring. Re-ranking frames on wing coverage was tried first and moved the body
+# pose of every winged rig, the Aracoix included, because their calmest frames do
+# not carry wing channels either — `_fold_wings` had been supplying those after the
+# fact. So this takes the same road: choose the body frame exactly as before, then
+# fill the wing subtree from a clip when nothing else has. Body stance is never
+# touched, and a rig whose chosen frame already drives its wings is not visited.
+STAND_WING_BONES = ('WING',)
+
 # An ogre, a troll, a wight: a biped that never straightens its legs, so every
 # frame it has is past the 30 degrees a walking stance is judged by. Widening
 # that threshold instead was tried and re-admits sprawl, because leg tilt alone
@@ -673,6 +694,11 @@ class AssetManager:
         # says out loud which rigs carry rotations this exporter wrote.
         layer = (layer + rung) if best else 'rest'
         best, wing_source = self._fold_wings(skeleton_id, skeleton, best)
+        # Rigs `_fold_wings` does not consider, whose chosen frame leaves the wing
+        # subtree at bind. See `STAND_WING_BONES`: for those rigs the cache holds
+        # the wings this exporter would otherwise have had to invent.
+        if wing_source is None and best:
+            best, wing_source = self._wings_from_clip(skeleton, best)
 
         # `+wingfold` still means *this exporter wrote these rotations*, which is the
         # distinction the block above WING_FOLD_SKELETONS exists to preserve. `+wingclip`
@@ -867,6 +893,65 @@ class AssetManager:
                 if drop is not None and (best_drop is None or drop < best_drop):
                     best, best_drop = merged, drop
         return best
+
+    def _wings_from_clip(self, skeleton, rotations):
+        """
+        Fill an unposed wing subtree from the calmest clip frame that drives it.
+
+        For rigs `_fold_wings` does not consider. It answers the same question in
+        the opposite direction: `_fold_wings` *authors* rotations because no frame
+        in the cache folds a Griffon's wings, while this one takes a frame the
+        cache already holds, because for these rigs one does. Nothing is invented,
+        so the layer suffix is `+wingclip`.
+
+        Only the wing bones are taken and only when the chosen frame carries none
+        of them. The body keeps the stance the ladder picked, which is the whole
+        reason this is a separate step rather than a term in the frame score: the
+        calmest standing frame of a winged rig routinely has no wing channels at
+        all, so scoring on coverage moves the body of every winged rig to fix the
+        wings of one.
+
+        Frames are gated the same way `_folded_wings` gates them — a wing hanging
+        low in a dive frame is not a wing at rest — and scored the same way
+        `_calmest_frame` scores them, so this introduces no third opinion about
+        what a calm frame is.
+        """
+        bones = getattr(skeleton, 'bones', None) or []
+        wing_names = {(b.name or '').upper() for b in bones
+                      if any(k in (b.name or '').upper() for k in STAND_WING_BONES)}
+        if not wing_names or any(name.upper() in wing_names for name in rotations):
+            return rotations, None
+
+        best, calmest = None, None
+        for token in sorted(set(getattr(skeleton, 'motion_tokens', None) or [])):
+            motion = self.load_motion(token)
+            data = getattr(motion, 'frames', None) if motion else None
+            if not data:
+                continue
+            total = max(1, data.get('frame_count') or 1)
+            step = max(1, total // STAND_FRAME_SAMPLES)
+            for frame in range(0, total, step):
+                candidate = self.load_motion_pose(token, frame)
+                if not candidate or not any(n in candidate for n in wing_names):
+                    continue
+                if not self._stands_upright(skeleton, candidate):
+                    continue
+                turns = [
+                    2.0 * math.acos(min(1.0, abs(q[3])))
+                    for name, q in candidate.items()
+                    if not any(k in name for k in STAND_FOOT_BONES)
+                ]
+                calm = sum(turns) / len(turns) if turns else 0.0
+                if calmest is None or calm < calmest:
+                    calmest, best = calm, candidate
+
+        if not best:
+            return rotations, None
+        merged = dict(rotations)
+        for name in wing_names:
+            if name in best:
+                merged[name] = best[name]
+        return merged, 'wingclip'
 
     def stand_layer(self, skeleton_id: int) -> str:
         """
