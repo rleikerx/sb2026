@@ -76,6 +76,27 @@ $expectedRows = [ordered]@{
     'content\guild_ranks.json'        = 21
 }
 
+# Source material that ships and nothing reads. These are CEILINGS, the mirror image of the
+# scores above: they are meant to fall as exporters are written, and a rise means either new
+# material arrived unread or something stopped reading what it used to.
+#
+# 889 is honest rather than alarming -- 703 of it is the treasure tables, which decrypt now
+# but have no exporter yet, and much of the rest is the UI config the sweep of the archives
+# already judged out of scope. The number's job is to be unable to go up quietly.
+$expectedCoverage = [ordered]@{
+    'unread'   = @{ Ceiling = 889; Note = 'files no exporter names' }
+    'dangling' = @{ Ceiling = 1;   Note = 'treasure ids pointing at nothing' }
+    'orphans'  = @{ Ceiling = 107; Note = 'tables nothing points at' }
+}
+
+# Runs first: every exporter below reads out of config/, and this is what fills it. Cheap
+# (seconds), and it no-ops with a note when the client is not mounted. It was outside the loop
+# until the day it turned out to have been writing 727 of its 930 files back out as ciphertext
+# -- a step nothing runs is a step nothing checks.
+$configLayer = @(
+    @{ Name = 'decrypt_wpak.py';         Note = 'client .wpak archives -> config/ (Blowfish CFB)' }
+)
+
 $dataLayer = @(
     @{ Name = 'export_content.py';       Note = 'races, classes, talents, items, structures, deeds, kits, guilds' },
     @{ Name = 'export_powers.py';        Note = 'powers, effects, actions, enchantments' },
@@ -143,6 +164,65 @@ function Test-RowCounts {
     }
 }
 
+function Test-ConfigBundle {
+    Write-Host ''
+    Write-Host 'config bundle  (complete, and actually decrypted)' -ForegroundColor Cyan
+    $out = & $python (Join-Path $root 'tools\decrypt_wpak.py') --verify
+    $summary = $out | Select-String -Pattern 'verify\|dirs=(\d+)\|files=(\d+)\|ciphertext=(\d+)\|problems=(\d+)' | Select-Object -Last 1
+    if (-not $summary) {
+        $failures.Add('decrypt_wpak.py --verify - no summary line')
+        Write-Host '  no summary line in output' -ForegroundColor Red
+        return
+    }
+    $files      = [int]$summary.Matches[0].Groups[2].Value
+    $ciphertext = [int]$summary.Matches[0].Groups[3].Value
+    $problems   = [int]$summary.Matches[0].Groups[4].Value
+    if ($problems -eq 0) {
+        Write-Host ("  {0,-30}{1} files, all plaintext" -f 'decrypt_wpak.py --verify', $files) -ForegroundColor Green
+        return
+    }
+    $failures.Add("decrypt_wpak.py --verify - $problems problem(s), $ciphertext still encrypted")
+    Write-Host ("  {0,-30}{1} problem(s), {2} still encrypted" -f 'decrypt_wpak.py --verify', $problems, $ciphertext) -ForegroundColor Red
+    $out | Select-String -Pattern '^  \S' | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
+}
+
+function Test-Coverage {
+    Write-Host ''
+    Write-Host 'coverage  (source material nothing reads - ceilings, not floors)' -ForegroundColor Cyan
+    $out = & $python (Join-Path $root 'tools\check_coverage.py')
+    if ($LASTEXITCODE -ne 0) {
+        $failures.Add("check_coverage.py - exit $LASTEXITCODE")
+        Write-Host ("  {0,-30}FAILED (exit $LASTEXITCODE)" -f 'check_coverage.py') -ForegroundColor Red
+        return
+    }
+    $summary = $out | Select-String -Pattern 'coverage\|unread=(\d+)\|dangling=(\d+)\|orphans=(\d+)' | Select-Object -Last 1
+    if (-not $summary) {
+        $failures.Add('check_coverage.py - no summary line')
+        Write-Host '  no summary line in output' -ForegroundColor Red
+        return
+    }
+    $got = @{
+        'unread'   = [int]$summary.Matches[0].Groups[1].Value
+        'dangling' = [int]$summary.Matches[0].Groups[2].Value
+        'orphans'  = [int]$summary.Matches[0].Groups[3].Value
+    }
+    foreach ($key in $expectedCoverage.Keys) {
+        $rule = $expectedCoverage[$key]
+        $value = $got[$key]
+        $label = "$key ($($rule.Note))"
+        if ($value -gt $rule.Ceiling) {
+            $failures.Add("coverage $key - $value, ceiling $($rule.Ceiling)")
+            Write-Host ("  {0,-48}{1}  ROSE from {2}" -f $label, $value, $rule.Ceiling) -ForegroundColor Red
+        } elseif ($value -lt $rule.Ceiling) {
+            # Progress. Say so, and say the ceiling is now stale -- an unlowered ceiling lets
+            # the number climb back to the old value without anyone hearing about it.
+            Write-Host ("  {0,-48}{1}  down from {2} - lower the ceiling" -f $label, $value, $rule.Ceiling) -ForegroundColor Yellow
+        } else {
+            Write-Host ("  {0,-48}{1}" -f $label, $value) -ForegroundColor Green
+        }
+    }
+}
+
 function Test-Checkers {
     Write-Host ''
     Write-Host 'wiki checks  (needs network; cached under .wikicache/)' -ForegroundColor Cyan
@@ -188,8 +268,8 @@ Write-Host "  output  $export"
 Write-Host ''
 
 if (-not $ChecksOnly) {
-    $steps = $dataLayer
-    if ($All) { $steps = $dataLayer + $assetLayer }
+    $steps = $configLayer + $dataLayer
+    if ($All) { $steps = $configLayer + $dataLayer + $assetLayer }
     $n = $steps.Count
     for ($i = 0; $i -lt $n; $i++) {
         Invoke-Step -Script $steps[$i].Name -Note $steps[$i].Note -Index ($i + 1) -Total $n
@@ -200,6 +280,11 @@ if (-not $ChecksOnly) {
     }
     Test-RowCounts
 }
+
+# Both run even under -SkipChecks: they read the export on disk and need no network, which is
+# the situation -SkipChecks exists for.
+Test-ConfigBundle
+Test-Coverage
 
 if (-not $SkipChecks) { Test-Checkers }
 
