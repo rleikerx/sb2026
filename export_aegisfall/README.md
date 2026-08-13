@@ -1325,25 +1325,49 @@ only a step that runs after the body is chosen can. Two rigs' worth of collatera
 that the baseline caught in one run, on a change whose whole claim was that it touched one
 race.
 
-#### Still wrong: skeleton 12 — the big-cat rig — stands nothing up. The posed frame leaves the body
-prone and stretched, legs splayed rather than under it, and the head floating clear of
-the neck with a visible gap. It is the rig and not one bad asset: a plain `Cheetah`
-(12198) does it exactly as the `Chimera` (14173) does. The control is `Hunting Hound`
-(12009) on skeleton 10, which stands correctly on four legs from the same code.
+#### Still wrong: skeleton 12, the big-cat rig, ships the one frame that does not stand
 
-It shows up in the numbers as length. Depth over height runs **3.5** across the rig —
-Chimera 27.148 / 7.584, Cheetah 11.498 / 3.271 — against 2.05 for the hound. A cheetah
-4.4 m long is the detached head and the sprawl, not the animal.
+The posed frame leaves the body prone and stretched, legs splayed rather than under it,
+and the head out in front of the neck with a visible gap. It is the rig and not one bad
+asset: a plain `Cheetah` (12198) does it exactly as the `Chimera` (14173) does, and 80
+assets carry it — every cat in the bestiary (Battle, Blizzard, Desert, Dire, Dune, Frost
+Tiger, Leopard, Cougar, Jaguar, Panther and their Giant/Great variants), the three
+Chimeras, and the summoned familiars. The control is `Hunting Hound` (12009) on skeleton
+10, which stands correctly on four legs from the same code.
 
-Carries it: 80 assets — every cat in the bestiary (Battle, Blizzard, Desert, Dire, Dune,
-Frost Tiger, Leopard, Cougar, Jaguar, Panther and their Giant/Great variants), the three
-Chimeras, and the summoned familiars.
+**The cache is not short of standing frames — it holds one in nearly every clip.** The rig
+has eight, and at its calmest accepted frame **seven of the eight draw a cat standing
+squarely on four legs**, head on its neck, tail out behind: `12000001` frame 12,
+`12000010` frame 32, `12000055` frame 28, `12000059` frame 2, `12000075` frame 10,
+`12000077` frame 15, `12000130` frame 22. The eighth, `12000002` frame 6, is the sprawl —
+and it is the one that ships, because at **calm 0.429** it is calmer than every standing
+frame in the rig (0.55 to 0.79) and the calmest frame wins outright.
 
-This one is not repaired, and the reason is not effort: there is no frame in skeleton 12's
-clips that anyone here has established as a stand. `_wings_from_clip` worked because the
-Nephilim's own idle demonstrably holds the shape the client draws — the cat rig needs that
-question answered first, and answering it wrongly would bake a sprawl into 80 assets and
-call it a pose. Recorded, with the picture, rather than guessed at.
+This is the Nephilim defect again in a different body. `_calmest_frame` scores distance
+from the bind pose, the bind pose runs every bone down one axis, and a body lying flat
+with its legs stretched out is *nearer to that* than a body standing with its legs bent
+underneath it. Calm is a proxy for "at rest" and it is not one: on this rig it is very
+nearly an anti-stand test.
+
+Two of the gates say so out loud. Sampled across both rigs, **every frame passes
+`limbs-down` and `on-ground`** — 7 of 7 on eight cat clips, 7 of 7 on eleven hound clips —
+so nothing is being rejected on either. The hound stands because its calmest frame happens
+to be a stand, not because anything tested for one.
+
+The numbers were also overstated here before this was looked at properly. Depth over
+height reads 3.56 on the shipped sprawl, but a correctly standing cheetah on this rig
+reads **2.7 to 2.9**, not the hound's 2.05. A big cat is genuinely long; the sprawl adds
+about a quarter to it rather than all of it.
+
+**The rig is the hound's rig.** Skeleton 12 is skeleton 10's 44 bones under the same names
+in the same order, plus `TAIL5` and `TAIL6`. Any stance test that works on one is
+evaluating the same joints on the other.
+
+Not repaired here, because the fix is a change to how the stance is chosen rather than a
+new source of data, and that decides the pose of every rig this export ships — the same
+reason `_wings_from_clip` was kept to a step that runs after the body frame is chosen.
+What it is *not* is short of evidence: the frames are listed above and the sheet draws
+them. See `dev_log/081326.md` for the review that corrected this section.
 
 **The count that found the first one, and would find the next.** Bones in the rig against
 bones the stand pose covers: 15 unposed is the normal figure on a 43-bone humanoid —
