@@ -3,16 +3,24 @@
 arcane_dump/
 wpak/
 
-# Generated asset exports - regenerate with tools/, never commit (multi-GB)
-# The bundles are excluded by their *contents* rather than as a directory, because git
-# cannot re-include a file whose parent directory is excluded -- and the consumer guide
-# is worth tracking. It is prose, not a generated bundle: it is the entry point a fresh
-# integration starts from, and it is useless to anyone who does not have this checkout.
+# The asset export is NOT disposable and is NOT built here any more. It lives in its own
+# repository at C:\code\export_aegisfall -- 4.5 GB, JSON in git and the art in LFS -- and
+# `export_aegisfall/` in this checkout is a junction pointing at it. These rules therefore
+# no longer mean "throw this away"; they mean "this belongs to the other repo", and they
+# keep its 66,581 files from being committed a second time here.
+#
+# The junction exists because all 32 tools compute REPO_ROOT / "export_aegisfall"
+# independently and loop.ps1 keeps its own copy of the path. Delete the link and the next
+# loop.ps1 builds a second export inside this repo: two trees, one name, free to disagree.
+# Recreate it with:  mklink /J export_aegisfall C:\code\export_aegisfall
 export_aegisfall/*
 !export_aegisfall/README.md
-# The animation bundle's own guide needs three lines, not one: git will not descend into an
-# excluded directory, so `animations/` has to be re-included before anything inside it can
-# be, and its contents then excluded again.
+# The two guides stay tracked here because they are the entry point a fresh integration
+# starts from. They are the same bytes the other repo tracks -- the junction means there is
+# one physical file, not a copy -- so the two cannot drift.
+# Re-including one needs three lines, not one: git will not descend into an excluded
+# directory, so `animations/` has to be re-included before anything inside it can be, and
+# its contents then excluded again.
 !export_aegisfall/animations/
 export_aegisfall/animations/*
 !export_aegisfall/animations/README.md
