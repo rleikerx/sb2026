@@ -457,7 +457,7 @@ def main() -> int:
                 "parryAnimId": parry or None,
                 # Items ship two meshes. Picking the male one for a female character is
                 # the same class of mistake as picking the male skeleton.
-                "renderObject": getattr(obj, "obj_render_id", None),
+                "renderObject": getattr(obj, "obj_render_object", None) or None,
                 "renderObjectFemale": getattr(obj, "item_render_object_female", None) or None,
             }
             if parry:
